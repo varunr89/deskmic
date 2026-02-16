@@ -40,7 +40,7 @@ impl MicCapture {
     ///
     /// `desired_sample_rate` should be 16000 (for VAD compatibility) or 8000.
     pub fn new(desired_sample_rate: u32) -> Result<Self> {
-        initialize_mta().map_err(|e| anyhow::anyhow!("COM MTA initialization failed: {:?}", e))?;
+        initialize_mta().ok().map_err(|e| anyhow::anyhow!("COM MTA initialization failed: {:?}", e))?;
 
         let enumerator = DeviceEnumerator::new()
             .map_err(|e| anyhow::anyhow!("Failed to create device enumerator: {:?}", e))?;

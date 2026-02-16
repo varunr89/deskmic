@@ -1,8 +1,31 @@
+// Hide the console window on Windows. CLI subcommands that need output
+// (status, transcribe, install, uninstall) re-attach or allocate a console.
+#![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
+
 use clap::Parser;
 use deskmic::cli::{Cli, Commands};
 use deskmic::config::Config;
 
+/// Re-attach to the parent console (if launched from a terminal) so that
+/// CLI subcommands can print output. No-op on non-Windows.
+#[cfg(target_os = "windows")]
+fn attach_console() {
+    use windows::Win32::System::Console::{AttachConsole, ATTACH_PARENT_PROCESS};
+    unsafe {
+        let _ = AttachConsole(ATTACH_PARENT_PROCESS);
+    }
+}
+
 fn main() -> anyhow::Result<()> {
+    let cli = Cli::parse();
+
+    // For CLI subcommands that produce output, re-attach to the parent console.
+    let needs_console = !matches!(cli.command, None | Some(Commands::Record));
+    #[cfg(target_os = "windows")]
+    if needs_console {
+        attach_console();
+    }
+
     // Initialize logging
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -11,7 +34,6 @@ fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    let cli = Cli::parse();
     let config = Config::load(cli.config.as_deref())?;
 
     match cli.command.unwrap_or(Commands::Record) {

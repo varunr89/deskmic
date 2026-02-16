@@ -44,7 +44,7 @@ impl TeamsCapture {
     /// `process_id` must be a valid PID of the target process.
     /// `desired_sample_rate` should be 16000 (for VAD compatibility) or 8000.
     pub fn new(process_id: u32, desired_sample_rate: u32) -> Result<Self> {
-        initialize_mta().map_err(|e| anyhow::anyhow!("COM MTA initialization failed: {:?}", e))?;
+        initialize_mta().ok().map_err(|e| anyhow::anyhow!("COM MTA initialization failed: {:?}", e))?;
 
         // Request 16-bit mono PCM at the desired sample rate.
         let desired_format = WaveFormat::new(

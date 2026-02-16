@@ -50,13 +50,13 @@ impl TranscriptionBackend for WhisperLocal {
             .map_err(|e| anyhow::anyhow!("Transcription failed: {:?}", e))?;
 
         let mut text = String::new();
-        let n_segments = state
-            .full_n_segments()
-            .map_err(|e| anyhow::anyhow!("Failed to get segments: {:?}", e))?;
+        let n_segments = state.full_n_segments();
         for i in 0..n_segments {
-            if let Ok(segment) = state.full_get_segment_text(i) {
-                text.push_str(&segment);
-                text.push(' ');
+            if let Some(segment) = state.get_segment(i) {
+                if let Ok(segment_text) = segment.to_str_lossy() {
+                    text.push_str(&segment_text);
+                    text.push(' ');
+                }
             }
         }
 
