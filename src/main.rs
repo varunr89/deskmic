@@ -3,6 +3,7 @@ mod cli;
 mod config;
 mod recorder;
 mod storage;
+mod transcribe;
 
 use clap::Parser;
 use cli::{Cli, Commands};
@@ -41,13 +42,11 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Commands::Transcribe { watch, backend } => {
-            tracing::info!(
-                watch = watch,
-                backend = ?backend,
-                "Transcribing..."
-            );
-            // TODO: Task 7+
-            Ok(())
+            if watch {
+                crate::transcribe::runner::run_transcribe_watch(&config, backend.as_deref())
+            } else {
+                crate::transcribe::runner::run_transcribe_oneshot(&config, backend.as_deref())
+            }
         }
     }
 }
