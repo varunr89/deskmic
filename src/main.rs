@@ -1,6 +1,7 @@
 mod audio;
 mod cli;
 mod config;
+mod storage;
 
 use clap::Parser;
 use cli::{Cli, Commands};
