@@ -1,6 +1,7 @@
 mod audio;
 mod cli;
 mod config;
+mod recorder;
 mod storage;
 
 use clap::Parser;
@@ -17,13 +18,12 @@ fn main() -> anyhow::Result<()> {
         .init();
 
     let cli = Cli::parse();
-    let _config = Config::load(cli.config.as_deref())?;
+    let config = Config::load(cli.config.as_deref())?;
 
     match cli.command.unwrap_or(Commands::Record) {
         Commands::Record => {
-            tracing::info!("Starting recording...");
-            // TODO: Task 3+
-            Ok(())
+            tracing::info!("Starting deskmic recorder");
+            crate::recorder::run_recorder(config)
         }
         Commands::Install => {
             tracing::info!("Installing to startup...");
