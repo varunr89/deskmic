@@ -1,0 +1,9 @@
+pub mod audio;
+pub mod cli;
+pub mod commands;
+pub mod config;
+pub mod recorder;
+pub mod storage;
+pub mod transcribe;
+#[cfg(target_os = "windows")]
+pub mod tray;
