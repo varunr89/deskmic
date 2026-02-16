@@ -52,7 +52,9 @@ pub fn run_file_writer(
                     &source,
                     output_config.organize_by_date,
                 );
-                std::fs::create_dir_all(path.parent().unwrap())?;
+                if let Some(parent) = path.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
 
                 let spec = WavSpec {
                     channels: 1,

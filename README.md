@@ -43,7 +43,7 @@ pre_speech_buffer_secs = 5.0
 silence_threshold_secs = 3.0
 
 [output]
-directory = "%LOCALAPPDATA%\\deskmic\\recordings"
+directory = "C:\\Users\\YourName\\AppData\\Local\\deskmic\\recordings"
 max_file_duration_mins = 30
 organize_by_date = true
 

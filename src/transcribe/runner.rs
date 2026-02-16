@@ -82,10 +82,11 @@ fn save_transcript(
 
     let date_dir = audio_path
         .parent()
-        .unwrap()
-        .file_name()
-        .unwrap()
-        .to_string_lossy();
+        .and_then(|p| p.file_name())
+        .map(|d| d.to_string_lossy().to_string())
+        .ok_or_else(|| {
+            anyhow::anyhow!("cannot determine date dir from: {}", audio_path.display())
+        })?;
     let jsonl_path = transcript_dir.join(format!("{}.jsonl", date_dir));
     let mut file = std::fs::OpenOptions::new()
         .create(true)

@@ -43,7 +43,7 @@ impl TranscriptionBackend for AzureOpenAIBackend {
         let file_bytes = std::fs::read(audio_path)?;
         let filename = audio_path
             .file_name()
-            .unwrap()
+            .ok_or_else(|| anyhow::anyhow!("audio path has no filename: {}", audio_path.display()))?
             .to_string_lossy()
             .to_string();
 
@@ -56,7 +56,9 @@ impl TranscriptionBackend for AzureOpenAIBackend {
             )
             .text("response_format", "json");
 
-        let client = reqwest::blocking::Client::new();
+        let client = reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(300))
+            .build()?;
         let response = client
             .post(&url)
             .header("api-key", &self.api_key)
