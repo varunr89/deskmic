@@ -42,4 +42,5 @@ tempfile = "3"
 wasapi = "0.22"
 voice_activity_detector = "0.2"
 tray-icon = "0.21"
+windows = { version = "0.62", features = ["Win32_UI_WindowsAndMessaging"] }
 whisper-rs = "0.15"

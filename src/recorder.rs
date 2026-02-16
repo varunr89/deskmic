@@ -5,6 +5,7 @@
 // - Cleanup thread (cross-platform)
 // - Mic capture pipeline thread (Windows only)
 // - Teams monitor thread (Windows only)
+// - System tray thread (Windows only)
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
@@ -16,8 +17,9 @@ use crate::audio::file_writer::run_file_writer;
 use crate::audio::pipeline::AudioMessage;
 use crate::config::Config;
 
-pub fn run_recorder(config: Config) -> Result<()> {
+pub fn run_recorder(config: Config, _config_path: Option<std::path::PathBuf>) -> Result<()> {
     let shutdown = Arc::new(AtomicBool::new(false));
+    let _paused = Arc::new(AtomicBool::new(false));
 
     // Set up Ctrl+C handler.
     let shutdown_ctrlc = shutdown.clone();
@@ -38,6 +40,23 @@ pub fn run_recorder(config: Config) -> Result<()> {
                 tracing::error!("File writer error: {:?}", e);
             }
         })?;
+
+    // --- System tray thread (Windows only) ---
+    #[cfg(target_os = "windows")]
+    let tray_handle = {
+        let recordings_dir = config.output.directory.clone();
+        let tray_shutdown = shutdown.clone();
+        let tray_paused = _paused.clone();
+        std::thread::Builder::new()
+            .name("tray".into())
+            .spawn(move || {
+                if let Err(e) =
+                    crate::tray::run_tray(recordings_dir, _config_path, tray_shutdown, tray_paused)
+                {
+                    tracing::error!("Tray error: {:?}", e);
+                }
+            })?
+    };
 
     // --- Mic capture pipeline thread (Windows only) ---
     #[cfg(target_os = "windows")]
@@ -68,13 +87,14 @@ pub fn run_recorder(config: Config) -> Result<()> {
 
     tracing::info!("Shutting down...");
 
-    // Join threads. On non-Windows the mic/teams handles don't exist.
+    // Join threads. On non-Windows the mic/teams/tray handles don't exist.
     #[cfg(target_os = "windows")]
     {
         if let Some(h) = mic_handle {
             let _ = h.join();
         }
         let _ = teams_handle.join();
+        let _ = tray_handle.join();
     }
 
     let _ = cleanup_handle.join();

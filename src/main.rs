@@ -4,6 +4,8 @@ mod config;
 mod recorder;
 mod storage;
 mod transcribe;
+#[cfg(target_os = "windows")]
+mod tray;
 
 use clap::Parser;
 use cli::{Cli, Commands};
@@ -24,7 +26,7 @@ fn main() -> anyhow::Result<()> {
     match cli.command.unwrap_or(Commands::Record) {
         Commands::Record => {
             tracing::info!("Starting deskmic recorder");
-            crate::recorder::run_recorder(config)
+            crate::recorder::run_recorder(config, cli.config)
         }
         Commands::Install => {
             tracing::info!("Installing to startup...");

@@ -459,6 +459,7 @@ dependencies = [
  "voice_activity_detector",
  "wasapi",
  "whisper-rs",
+ "windows",
 ]
 
 [[package]]
