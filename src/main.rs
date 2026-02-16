@@ -1,5 +1,6 @@
 mod audio;
 mod cli;
+mod commands;
 mod config;
 mod recorder;
 mod storage;
@@ -28,21 +29,9 @@ fn main() -> anyhow::Result<()> {
             tracing::info!("Starting deskmic recorder");
             crate::recorder::run_recorder(config, cli.config)
         }
-        Commands::Install => {
-            tracing::info!("Installing to startup...");
-            // TODO: Task 9
-            Ok(())
-        }
-        Commands::Uninstall => {
-            tracing::info!("Removing from startup...");
-            // TODO: Task 9
-            Ok(())
-        }
-        Commands::Status => {
-            tracing::info!("Checking status...");
-            // TODO: Task 10
-            Ok(())
-        }
+        Commands::Install => crate::commands::install_startup(),
+        Commands::Uninstall => crate::commands::uninstall_startup(),
+        Commands::Status => crate::commands::show_status(&config.output.directory),
         Commands::Transcribe { watch, backend } => {
             if watch {
                 crate::transcribe::runner::run_transcribe_watch(&config, backend.as_deref())
