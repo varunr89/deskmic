@@ -63,6 +63,7 @@ impl TranscriptionBackend for AzureOpenAIBackend {
             .multipart(form)
             .send()?;
 
+        let response = response.error_for_status()?;
         let body: serde_json::Value = response.json()?;
         let text = body["text"].as_str().unwrap_or("").to_string();
 

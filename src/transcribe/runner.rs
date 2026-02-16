@@ -156,7 +156,9 @@ pub fn run_transcribe_watch(config: &Config, backend_override: Option<&str>) -> 
 
         if cpu_usage < idle_config.cpu_threshold_percent {
             tracing::info!("System idle (CPU: {:.1}%), processing...", cpu_usage);
-            run_transcribe_oneshot(config, backend_override)?;
+            if let Err(e) = run_transcribe_oneshot(config, backend_override) {
+                tracing::error!("Transcription batch failed: {:?}", e);
+            }
         } else {
             tracing::debug!("System busy (CPU: {:.1}%), waiting...", cpu_usage);
         }
