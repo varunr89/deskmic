@@ -1,1 +1,4 @@
 /target
+*.wav
+*.bin
+.deskmic-state.json
