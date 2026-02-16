@@ -1,5 +1,6 @@
 #[cfg(target_os = "windows")]
 pub mod capture;
+pub mod file_writer;
 pub mod pipeline;
 pub mod ring_buffer;
 #[cfg(target_os = "windows")]
