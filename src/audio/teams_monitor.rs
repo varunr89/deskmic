@@ -75,8 +75,9 @@ mod monitor {
                         .spawn(move || {
                             match TeamsCapture::new(pid, sample_rate) {
                                 Ok(capture) => {
-                                    let capture_fn =
-                                        || -> Result<Option<Vec<i16>>> { capture.read_frames() };
+                                    let capture_fn = || -> Result<Option<Vec<i16>>> {
+                                        Ok(capture.read_frames()?)
+                                    };
                                     let start_fn = || -> Result<()> { capture.start() };
 
                                     // Determine VAD chunk size based on sample rate.

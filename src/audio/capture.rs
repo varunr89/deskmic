@@ -7,7 +7,20 @@
 use std::collections::VecDeque;
 
 use anyhow::Result;
+use thiserror::Error;
 use wasapi::*;
+
+/// Errors that can occur during audio capture.
+///
+/// `DeviceInvalidated` signals that the audio device was lost (e.g. sleep/wake,
+/// USB unplug, default device change) and the pipeline should re-initialise.
+#[derive(Error, Debug)]
+pub enum CaptureError {
+    #[error("Device invalidated (sleep/wake or device change)")]
+    DeviceInvalidated,
+    #[error("Capture error: {0}")]
+    Other(#[from] anyhow::Error),
+}
 
 /// Captures audio from the default microphone via WASAPI in shared event-driven mode.
 ///
@@ -93,20 +106,38 @@ impl MicCapture {
     ///
     /// Returns `Ok(Some(samples))` when audio data is available, or `Ok(None)`
     /// if no data was captured in this cycle (e.g. silence flags set).
-    /// Returns `Err` on timeout or device errors.
-    pub fn read_frames(&self) -> Result<Option<Vec<i16>>> {
+    /// Returns `Err(CaptureError::DeviceInvalidated)` when the device is lost
+    /// (sleep/wake, USB unplug, default device change), or `Err(CaptureError::Other)`
+    /// for other failures.
+    pub fn read_frames(&self) -> std::result::Result<Option<Vec<i16>>, CaptureError> {
         // Wait for WASAPI to signal that a buffer is ready.
-        self.event_handle
-            .wait_for_event(1000)
-            .map_err(|e| anyhow::anyhow!("Event wait timeout/error: {:?}", e))?;
+        if let Err(e) = self.event_handle.wait_for_event(1000) {
+            let msg = format!("{:?}", e);
+            if Self::is_device_invalidated_error(&msg) {
+                return Err(CaptureError::DeviceInvalidated);
+            }
+            return Err(CaptureError::Other(anyhow::anyhow!(
+                "Event wait timeout/error: {}",
+                msg
+            )));
+        }
 
         // Read captured bytes into a VecDeque, matching the pattern from the
         // wasapi crate's record example.
         let mut sample_queue: VecDeque<u8> = VecDeque::new();
-        let buffer_info = self
+        if let Err(e) = self
             .capture_client
             .read_from_device_to_deque(&mut sample_queue)
-            .map_err(|e| anyhow::anyhow!("Failed to read from capture device: {:?}", e))?;
+        {
+            let msg = format!("{:?}", e);
+            if Self::is_device_invalidated_error(&msg) {
+                return Err(CaptureError::DeviceInvalidated);
+            }
+            return Err(CaptureError::Other(anyhow::anyhow!(
+                "Failed to read from capture device: {}",
+                msg
+            )));
+        }
 
         if sample_queue.is_empty() {
             return Ok(None);
@@ -121,6 +152,23 @@ impl MicCapture {
             .collect();
 
         Ok(Some(samples))
+    }
+
+    /// Check whether a WASAPI error message indicates the audio device was
+    /// invalidated (removed, disconnected, or the default changed).
+    ///
+    /// Common HRESULT codes:
+    /// - `AUDCLNT_E_DEVICE_INVALIDATED` (0x88890004)
+    /// - `AUDCLNT_E_SERVICE_NOT_RUNNING` (0x88890010)
+    /// - `AUDCLNT_E_ENDPOINT_OFFLOAD_NOT_CAPABLE`
+    fn is_device_invalidated_error(msg: &str) -> bool {
+        let msg_upper = msg.to_uppercase();
+        msg_upper.contains("AUDCLNT_E_DEVICE_INVALIDATED")
+            || msg_upper.contains("AUDCLNT_E_SERVICE_NOT_RUNNING")
+            || msg_upper.contains("88890004")
+            || msg_upper.contains("88890010")
+            || msg_upper.contains("DEVICE_INVALIDATED")
+            || msg_upper.contains("ENDPOINT_CREATE_FAILED")
     }
 
     /// Stop the capture stream.

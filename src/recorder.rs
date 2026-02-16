@@ -124,11 +124,17 @@ fn spawn_mic_pipeline(
     let handle = std::thread::Builder::new()
         .name("mic-capture".into())
         .spawn(move || {
+            // Exponential backoff: starts at 2s, doubles each failure, caps at 30s.
+            const INITIAL_BACKOFF_SECS: u64 = 2;
+            const MAX_BACKOFF_SECS: u64 = 30;
+            let mut backoff_secs: u64 = INITIAL_BACKOFF_SECS;
+
             // Outer recovery loop: restart on transient errors.
             while !shutdown.load(Ordering::Relaxed) {
                 match crate::audio::capture::MicCapture::new(sample_rate) {
                     Ok(capture) => {
-                        let capture_fn = || -> Result<Option<Vec<i16>>> { capture.read_frames() };
+                        let capture_fn =
+                            || -> Result<Option<Vec<i16>>> { Ok(capture.read_frames()?) };
                         let start_fn = || -> Result<()> { capture.start() };
 
                         let chunk_size: usize = match sample_rate {
@@ -136,6 +142,9 @@ fn spawn_mic_pipeline(
                             16000 => 512,
                             _ => 512,
                         };
+
+                        // If we got this far, device initialised — reset backoff.
+                        backoff_secs = INITIAL_BACKOFF_SECS;
 
                         match crate::audio::vad::Vad::new(sample_rate, speech_threshold) {
                             Ok(mut vad) => {
@@ -154,14 +163,19 @@ fn spawn_mic_pipeline(
                                     Ok(()) => break,
                                     Err(e) => {
                                         tracing::error!(
-                                            "Mic pipeline error: {:?}, restarting in 2s",
-                                            e
+                                            "Mic pipeline error: {:?}, restarting in {}s",
+                                            e,
+                                            backoff_secs
                                         );
                                     }
                                 }
                             }
                             Err(e) => {
-                                tracing::error!("Failed to create VAD: {:?}, retrying in 2s", e);
+                                tracing::error!(
+                                    "Failed to create VAD: {:?}, retrying in {}s",
+                                    e,
+                                    backoff_secs
+                                );
                             }
                         }
 
@@ -170,12 +184,17 @@ fn spawn_mic_pipeline(
                         }
                     }
                     Err(e) => {
-                        tracing::error!("Mic init failed: {:?}, retrying in 2s", e);
+                        tracing::error!("Mic init failed: {:?}, retrying in {}s", e, backoff_secs);
                     }
                 }
 
                 if !shutdown.load(Ordering::Relaxed) {
-                    std::thread::sleep(std::time::Duration::from_secs(2));
+                    tracing::info!(
+                        "Mic recovery: sleeping {}s before retry (device may be waking up)",
+                        backoff_secs
+                    );
+                    std::thread::sleep(std::time::Duration::from_secs(backoff_secs));
+                    backoff_secs = (backoff_secs * 2).min(MAX_BACKOFF_SECS);
                 }
             }
         })?;
