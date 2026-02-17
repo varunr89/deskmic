@@ -34,12 +34,12 @@ fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    let config = Config::load(cli.config.as_deref())?;
+    let (config, resolved_config_path) = Config::load_with_path(cli.config.as_deref())?;
 
     match cli.command.unwrap_or(Commands::Record) {
         Commands::Record => {
             tracing::info!("Starting deskmic recorder");
-            deskmic::recorder::run_recorder(config, cli.config)
+            deskmic::recorder::run_recorder(config, resolved_config_path.or(cli.config))
         }
         Commands::Install => deskmic::commands::install_startup(),
         Commands::Uninstall => deskmic::commands::uninstall_startup(),

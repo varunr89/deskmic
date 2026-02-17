@@ -71,9 +71,19 @@ pub fn run_tray(
                     .arg(&recordings_dir)
                     .spawn();
             } else if event.id == settings_item.id() {
-                if let Some(ref path) = config_path {
-                    let _ = std::process::Command::new("notepad").arg(path).spawn();
-                }
+                let path = config_path.clone().unwrap_or_else(|| {
+                    // No config file exists yet — create a default one beside the exe.
+                    let default_path = std::env::current_exe()
+                        .ok()
+                        .and_then(|exe| exe.parent().map(|p| p.join("deskmic.toml")))
+                        .unwrap_or_else(|| std::path::PathBuf::from("deskmic.toml"));
+                    if !default_path.exists() {
+                        let content = crate::config::Config::generate_default_commented();
+                        let _ = std::fs::write(&default_path, &content);
+                    }
+                    default_path
+                });
+                let _ = std::process::Command::new("notepad").arg(&path).spawn();
             }
         }
 

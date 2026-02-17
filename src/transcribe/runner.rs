@@ -39,6 +39,27 @@ fn find_pending_files(recordings_dir: &Path, state: &TranscriptionState) -> Resu
     Ok(pending)
 }
 
+/// Resolve the model path from config. If the value is already an absolute path
+/// or ends in ".bin", use it as-is. Otherwise, treat it as a model name and
+/// construct "ggml-{name}.bin" in the exe directory.
+fn resolve_model_path(model: &str) -> String {
+    let path = Path::new(model);
+    // If it's already an absolute path or has a .bin extension, use as-is
+    if path.is_absolute() || path.extension().map(|e| e == "bin").unwrap_or(false) {
+        return model.to_string();
+    }
+    // Otherwise construct ggml-{model}.bin next to the exe
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(exe_dir) = exe_path.parent() {
+            return exe_dir
+                .join(format!("ggml-{}.bin", model))
+                .to_string_lossy()
+                .to_string();
+        }
+    }
+    format!("ggml-{}.bin", model)
+}
+
 /// Build the appropriate backend from config.
 fn build_backend(
     config: &Config,
@@ -51,9 +72,8 @@ fn build_backend(
             #[cfg(target_os = "windows")]
             {
                 use crate::transcribe::whisper_local::WhisperLocal;
-                let model_file = format!("ggml-{}.bin", config.transcription.model);
-                // TODO: resolve actual model path (exe dir, then %APPDATA%\deskmic\models\)
-                Ok(Box::new(WhisperLocal::new(&model_file)?))
+                let model_path = resolve_model_path(&config.transcription.model);
+                Ok(Box::new(WhisperLocal::new(&model_path)?))
             }
             #[cfg(not(target_os = "windows"))]
             {
@@ -257,5 +277,26 @@ mod tests {
         let state = TranscriptionState::default();
         let pending = find_pending_files(tmp.path(), &state).unwrap();
         assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn test_resolve_model_path_short_name() {
+        let result = resolve_model_path("base.en");
+        assert!(result.contains("ggml-base.en.bin"));
+    }
+
+    #[test]
+    fn test_resolve_model_path_absolute_path() {
+        let abs = if cfg!(windows) {
+            "C:\\models\\ggml-base.en.bin"
+        } else {
+            "/tmp/models/ggml-base.en.bin"
+        };
+        assert_eq!(resolve_model_path(abs), abs);
+    }
+
+    #[test]
+    fn test_resolve_model_path_bin_extension() {
+        assert_eq!(resolve_model_path("my-model.bin"), "my-model.bin");
     }
 }

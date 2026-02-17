@@ -1,0 +1,15 @@
+feat: working Settings tray item with auto-generated documented config
+
+- Add Config::load_with_path() returning (Config, Option<PathBuf>) so the
+  resolved config file path is available throughout the app
+- Add Config::generate_default_commented() producing a fully-documented TOML
+  config with all fields and inline comments explaining each setting
+- Update main.rs to pass resolved config path to the recorder/tray
+- Settings tray item now creates a default config beside the exe if missing
+  and always opens it in Notepad
+- Fix model path construction bug: resolve_model_path() handles absolute paths
+  and .bin extensions without double-wrapping in ggml-{}.bin
+- Add settings-feature implementation plan doc
+- 10 new unit tests covering config loading, generation, and model path resolution
+
+Closes #4

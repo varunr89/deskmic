@@ -176,15 +176,15 @@ impl Default for IdleWatchConfig {
 // --- Config loading ---
 
 impl Config {
-    /// Load config from an explicit path, or search standard locations, or fall back to defaults.
-    pub fn load(path: Option<&Path>) -> anyhow::Result<Self> {
+    /// Load config and return the resolved file path (if any).
+    pub fn load_with_path(path: Option<&Path>) -> anyhow::Result<(Self, Option<PathBuf>)> {
         // 1. Check explicit path
         if let Some(p) = path {
             let content = std::fs::read_to_string(p).map_err(|e| {
                 anyhow::anyhow!("Failed to read config file {}: {}", p.display(), e)
             })?;
             let config: Config = toml::from_str(&content)?;
-            return Ok(config);
+            return Ok((config, Some(p.to_path_buf())));
         }
 
         // 2. Check beside the executable
@@ -194,7 +194,7 @@ impl Config {
                 if p.exists() {
                     let content = std::fs::read_to_string(&p)?;
                     let config: Config = toml::from_str(&content)?;
-                    return Ok(config);
+                    return Ok((config, Some(p)));
                 }
             }
         }
@@ -205,13 +205,100 @@ impl Config {
             if platform_config.exists() {
                 let content = std::fs::read_to_string(&platform_config)?;
                 let config: Config = toml::from_str(&content)?;
-                return Ok(config);
+                return Ok((config, Some(platform_config)));
             }
         }
 
         // 4. Fall back to defaults
         tracing::info!("No config file found, using defaults");
-        Ok(Config::default())
+        Ok((Config::default(), None))
+    }
+
+    /// Load config (without tracking the resolved path). Kept for backward compat.
+    pub fn load(path: Option<&Path>) -> anyhow::Result<Self> {
+        Self::load_with_path(path).map(|(config, _)| config)
+    }
+
+    /// Generate a default config file with all fields and inline documentation.
+    pub fn generate_default_commented() -> String {
+        let default_output_dir = dirs::data_local_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("deskmic")
+            .join("recordings");
+        let output_dir_str = default_output_dir.to_string_lossy().replace('\\', "\\\\");
+
+        format!(
+r#"# deskmic configuration
+# Edit this file to customize recording, transcription, and storage settings.
+# Restart deskmic after saving changes for them to take effect.
+
+[capture]
+# Audio capture sample rate in Hz. 16000 is required for VAD compatibility.
+sample_rate = 16000
+# Bits per sample (16-bit PCM is standard).
+bit_depth = 16
+# Number of audio channels (1 = mono).
+channels = 1
+
+[vad]
+# Seconds of audio to keep in the ring buffer before speech is detected.
+# This "pre-roll" ensures you don't lose the beginning of a sentence.
+pre_speech_buffer_secs = 5.0
+# Seconds of silence after speech before the recording segment ends.
+# Lower values = more files, higher values = longer trailing silence.
+silence_threshold_secs = 3.0
+# Voice activity detection confidence threshold (0.0 to 1.0).
+# Lower = more sensitive (catches quiet speech), higher = fewer false positives.
+speech_threshold = 0.5
+
+[output]
+# Directory where WAV recordings are saved.
+directory = "{output_dir}"
+# Maximum duration of a single recording file in minutes.
+# Recordings are split into new files when this limit is reached.
+max_file_duration_mins = 30
+# Organize recordings into date-based subdirectories (YYYY-MM-DD).
+organize_by_date = true
+
+[targets]
+# List of process names to capture audio from (application loopback).
+processes = ["ms-teams.exe"]
+# Whether to also capture from the default microphone.
+mic_enabled = true
+
+[storage]
+# Number of days to keep recordings before automatic cleanup.
+retention_days = 30
+# How often (in hours) to run the cleanup job.
+cleanup_interval_hours = 6
+# Maximum total disk usage in GB. Oldest files are deleted first.
+# Comment out or remove to disable disk usage limits.
+# max_disk_usage_gb = 50.0
+
+[transcription]
+# Transcription backend: "local" (whisper.cpp on device) or "azure" (cloud API).
+backend = "local"
+# Whisper model name (for local backend). Options: tiny.en, base.en, small.en, medium.en
+# Or an absolute path to a .bin model file.
+model = "base.en"
+
+[transcription.azure]
+# Azure OpenAI Whisper endpoint URL.
+# endpoint = "https://your-resource.openai.azure.com"
+# API key (or set DESKMIC_AZURE_KEY environment variable).
+# api_key = ""
+# Deployment name for the Whisper model.
+# deployment = "whisper"
+
+[transcription.idle_watch]
+# Only run transcription when average CPU usage is below this percentage.
+# Prevents transcription from slowing down your machine during active use.
+cpu_threshold_percent = 20.0
+# How often (in seconds) to check whether the system is idle for transcription.
+idle_check_interval_secs = 30
+"#,
+            output_dir = output_dir_str
+        )
     }
 }
 
@@ -336,5 +423,48 @@ mod tests {
     fn test_load_nonexistent_path_errors() {
         let result = Config::load(Some(Path::new("/nonexistent/config.toml")));
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_load_with_path_returns_resolved_path() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let config_file = tmp.path().join("deskmic.toml");
+        std::fs::write(&config_file, "[capture]\nsample_rate = 44100\n").unwrap();
+
+        let (config, resolved) = Config::load_with_path(Some(config_file.as_path())).unwrap();
+        assert_eq!(config.capture.sample_rate, 44100);
+        assert_eq!(resolved, Some(config_file));
+    }
+
+    #[test]
+    fn test_load_with_path_none_returns_none_when_no_file() {
+        let (config, resolved) = Config::load_with_path(None).unwrap();
+        assert_eq!(config.capture.sample_rate, 16000);
+        let _ = resolved;
+    }
+
+    #[test]
+    fn test_generate_default_commented_is_valid_toml() {
+        let content = Config::generate_default_commented();
+        // Should be parseable as valid TOML (comments are stripped by parser)
+        let config: Config = toml::from_str(&content).unwrap();
+        assert_eq!(config.capture.sample_rate, 16000);
+        assert_eq!(config.vad.pre_speech_buffer_secs, 5.0);
+        assert_eq!(config.output.max_file_duration_mins, 30);
+        assert_eq!(config.transcription.backend, "local");
+        assert_eq!(config.transcription.idle_watch.idle_check_interval_secs, 30);
+    }
+
+    #[test]
+    fn test_generate_default_commented_has_all_sections() {
+        let content = Config::generate_default_commented();
+        assert!(content.contains("[capture]"));
+        assert!(content.contains("[vad]"));
+        assert!(content.contains("[output]"));
+        assert!(content.contains("[targets]"));
+        assert!(content.contains("[storage]"));
+        assert!(content.contains("[transcription]"));
+        assert!(content.contains("[transcription.azure]"));
+        assert!(content.contains("[transcription.idle_watch]"));
     }
 }
