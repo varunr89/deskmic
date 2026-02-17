@@ -2,3 +2,5 @@
 *.wav
 *.bin
 .deskmic-state.json
+
+.commitmsg
