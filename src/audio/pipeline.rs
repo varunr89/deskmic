@@ -38,6 +38,9 @@ pub enum AudioMessage {
 /// - `vad`: any implementation of `VadProcessor`.
 /// - `sender`: channel for `AudioMessage`s consumed by the file writer.
 /// - `shutdown`: atomic flag; when set to `true`, the loop exits.
+/// - `paused`: atomic flag; when `true`, audio is still drained from the capture
+///   device (to prevent WASAPI buffer overflow) but VAD processing is skipped,
+///   buffers are cleared, and any in-progress speech segment is closed out.
 ///
 /// The pipeline buffers non-speech audio in a ring buffer so that the first
 /// `pre_speech_buffer_secs` of audio before speech onset is included in the
@@ -53,6 +56,7 @@ pub fn run_capture_pipeline(
     chunk_size: usize,
     sender: Sender<AudioMessage>,
     shutdown: Arc<AtomicBool>,
+    paused: Arc<AtomicBool>,
 ) -> Result<()> {
     let mut ring_buffer = RingBuffer::new(sample_rate, pre_speech_buffer_secs);
     let silence_samples = (sample_rate as f32 * silence_threshold_secs) as usize;
@@ -74,6 +78,21 @@ pub fn run_capture_pipeline(
                 break;
             }
         };
+
+        // When paused, drain audio (already read above) but skip all processing.
+        // Close out any in-progress speech segment so the WAV file is finalized.
+        if paused.load(Ordering::Relaxed) {
+            if is_speaking {
+                let _ = sender.send(AudioMessage::SpeechEnd {
+                    source: source_name.clone(),
+                });
+                is_speaking = false;
+                silence_count = 0;
+            }
+            pending_samples.clear();
+            ring_buffer.clear();
+            continue;
+        }
 
         pending_samples.extend_from_slice(&samples);
 
@@ -202,6 +221,7 @@ mod tests {
             chunk_size,
             tx,
             shutdown,
+            Arc::new(AtomicBool::new(false)),
         );
 
         assert!(result.is_ok());
@@ -264,11 +284,69 @@ mod tests {
             512,
             tx,
             shutdown,
+            Arc::new(AtomicBool::new(false)),
         );
 
         assert!(result.is_ok());
         // No messages should have been sent.
         let messages: Vec<AudioMessage> = rx.try_iter().collect();
         assert!(messages.is_empty());
+    }
+
+    #[test]
+    fn test_pipeline_paused_skips_processing() {
+        let (tx, rx) = mpsc::channel();
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let paused = Arc::new(AtomicBool::new(true)); // start paused
+
+        let chunk_size = 4;
+        let speech_chunk = vec![100i16; chunk_size];
+
+        // Feed several speech chunks (which would trigger SpeechStart if not paused),
+        // then None to end the loop.
+        let mut chunks: Vec<Option<Vec<i16>>> = vec![
+            Some(speech_chunk.clone()),
+            Some(speech_chunk.clone()),
+            Some(speech_chunk.clone()),
+            None,
+        ];
+        chunks.reverse();
+
+        let chunks = std::cell::RefCell::new(chunks);
+
+        let capture_fn = || -> Result<Option<Vec<i16>>> {
+            let mut c = chunks.borrow_mut();
+            match c.pop() {
+                Some(val) => Ok(val),
+                None => Ok(None),
+            }
+        };
+
+        let start_fn = || -> Result<()> { Ok(()) };
+        let mut vad = TestVad;
+
+        let result = run_capture_pipeline(
+            "test-mic".to_string(),
+            capture_fn,
+            start_fn,
+            8,
+            0.5,
+            0.5,
+            &mut vad,
+            chunk_size,
+            tx,
+            shutdown,
+            paused,
+        );
+
+        assert!(result.is_ok());
+
+        // No messages should have been sent because we were paused the whole time.
+        let messages: Vec<AudioMessage> = rx.try_iter().collect();
+        assert!(
+            messages.is_empty(),
+            "Expected no messages when paused, got {}",
+            messages.len()
+        );
     }
 }

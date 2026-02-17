@@ -19,7 +19,8 @@ use crate::config::Config;
 
 pub fn run_recorder(config: Config, _config_path: Option<std::path::PathBuf>) -> Result<()> {
     let shutdown = Arc::new(AtomicBool::new(false));
-    let _paused = Arc::new(AtomicBool::new(false));
+    #[allow(unused_variables)]
+    let paused = Arc::new(AtomicBool::new(false));
 
     // Set up Ctrl+C handler.
     let shutdown_ctrlc = shutdown.clone();
@@ -46,7 +47,7 @@ pub fn run_recorder(config: Config, _config_path: Option<std::path::PathBuf>) ->
     let tray_handle = {
         let recordings_dir = config.output.directory.clone();
         let tray_shutdown = shutdown.clone();
-        let tray_paused = _paused.clone();
+        let tray_paused = paused.clone();
         std::thread::Builder::new()
             .name("tray".into())
             .spawn(move || {
@@ -60,11 +61,12 @@ pub fn run_recorder(config: Config, _config_path: Option<std::path::PathBuf>) ->
 
     // --- Mic capture pipeline thread (Windows only) ---
     #[cfg(target_os = "windows")]
-    let mic_handle = spawn_mic_pipeline(&config, sender.clone(), shutdown.clone())?;
+    let mic_handle = spawn_mic_pipeline(&config, sender.clone(), shutdown.clone(), paused.clone())?;
 
     // --- Teams monitor thread (Windows only) ---
     #[cfg(target_os = "windows")]
-    let teams_handle = spawn_teams_monitor(&config, sender.clone(), shutdown.clone())?;
+    let teams_handle =
+        spawn_teams_monitor(&config, sender.clone(), shutdown.clone(), paused.clone())?;
 
     // --- Cleanup thread (cross-platform) ---
     let cleanup_dir = config.output.directory.clone();
@@ -111,6 +113,7 @@ fn spawn_mic_pipeline(
     config: &Config,
     sender: mpsc::Sender<AudioMessage>,
     shutdown: Arc<AtomicBool>,
+    paused: Arc<AtomicBool>,
 ) -> Result<Option<std::thread::JoinHandle<()>>> {
     if !config.targets.mic_enabled {
         return Ok(None);
@@ -159,6 +162,7 @@ fn spawn_mic_pipeline(
                                     chunk_size,
                                     sender.clone(),
                                     shutdown.clone(),
+                                    paused.clone(),
                                 ) {
                                     Ok(()) => break,
                                     Err(e) => {
@@ -208,14 +212,18 @@ fn spawn_teams_monitor(
     config: &Config,
     sender: mpsc::Sender<AudioMessage>,
     shutdown: Arc<AtomicBool>,
+    paused: Arc<AtomicBool>,
 ) -> Result<std::thread::JoinHandle<()>> {
     let teams_config = config.clone();
     let handle = std::thread::Builder::new()
         .name("teams-monitor".into())
         .spawn(move || {
-            if let Err(e) =
-                crate::audio::teams_monitor::run_teams_monitor(teams_config, sender, shutdown)
-            {
+            if let Err(e) = crate::audio::teams_monitor::run_teams_monitor(
+                teams_config,
+                sender,
+                shutdown,
+                paused,
+            ) {
                 tracing::error!("Teams monitor error: {:?}", e);
             }
         })?;

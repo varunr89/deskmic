@@ -49,6 +49,7 @@ mod monitor {
         config: Config,
         sender: Sender<AudioMessage>,
         shutdown: Arc<AtomicBool>,
+        paused: Arc<AtomicBool>,
     ) -> Result<()> {
         let mut active_pid: Option<u32> = None;
         let mut pipeline_shutdown: Option<Arc<AtomicBool>> = None;
@@ -65,6 +66,7 @@ mod monitor {
                     let pipe_shutdown = Arc::new(AtomicBool::new(false));
                     let pipe_shutdown_clone = pipe_shutdown.clone();
                     let sender_clone = sender.clone();
+                    let paused_clone = paused.clone();
                     let sample_rate = config.capture.sample_rate;
                     let pre_speech_buffer_secs = config.vad.pre_speech_buffer_secs;
                     let silence_threshold_secs = config.vad.silence_threshold_secs;
@@ -100,6 +102,7 @@ mod monitor {
                                                 chunk_size,
                                                 sender_clone,
                                                 pipe_shutdown_clone,
+                                                paused_clone,
                                             ) {
                                                 tracing::error!("Teams pipeline error: {:?}", e);
                                             }
