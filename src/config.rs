@@ -167,7 +167,7 @@ impl Default for AzureConfig {
 impl Default for IdleWatchConfig {
     fn default() -> Self {
         Self {
-            cpu_threshold_percent: 20.0,
+            cpu_threshold_percent: 50.0,
             idle_check_interval_secs: 30,
         }
     }
@@ -293,7 +293,7 @@ model = "base.en"
 [transcription.idle_watch]
 # Only run transcription when average CPU usage is below this percentage.
 # Prevents transcription from slowing down your machine during active use.
-cpu_threshold_percent = 20.0
+cpu_threshold_percent = 50.0
 # How often (in seconds) to check whether the system is idle for transcription.
 idle_check_interval_secs = 30
 "#,

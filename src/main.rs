@@ -16,6 +16,59 @@ fn attach_console() {
     }
 }
 
+/// Acquire a named mutex to prevent multiple instances of a given component.
+/// Returns the mutex handle on success, or None if another instance already holds it.
+/// The handle must be kept alive for the lifetime of the process.
+#[cfg(target_os = "windows")]
+fn try_acquire_instance_mutex(
+    name: &str,
+) -> Option<windows::Win32::Foundation::HANDLE> {
+    use windows::core::PCWSTR;
+    use windows::Win32::Foundation::ERROR_ALREADY_EXISTS;
+    use windows::Win32::System::Threading::CreateMutexW;
+
+    let wide_name: Vec<u16> = name.encode_utf16().chain(std::iter::once(0)).collect();
+    let result = unsafe { CreateMutexW(None, false, PCWSTR(wide_name.as_ptr())) };
+
+    match result {
+        Ok(handle) => {
+            // CreateMutexW succeeded — check if we're the first owner or a duplicate.
+            let last_error = unsafe { windows::Win32::Foundation::GetLastError() };
+            if last_error == ERROR_ALREADY_EXISTS {
+                // Another instance already holds this mutex.
+                None
+            } else {
+                Some(handle)
+            }
+        }
+        Err(_) => None,
+    }
+}
+
+/// Show a Windows message box (used for single-instance notification).
+#[cfg(target_os = "windows")]
+fn show_already_running_message() {
+    use windows::core::PCWSTR;
+    use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONINFORMATION, MB_OK};
+
+    let text: Vec<u16> = "deskmic is already running.\nCheck the system tray for the icon."
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    let caption: Vec<u16> = "deskmic"
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    unsafe {
+        MessageBoxW(
+            None,
+            PCWSTR(text.as_ptr()),
+            PCWSTR(caption.as_ptr()),
+            MB_OK | MB_ICONINFORMATION,
+        );
+    }
+}
+
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
@@ -25,6 +78,36 @@ fn main() -> anyhow::Result<()> {
     if needs_console {
         attach_console();
     }
+
+    // Single-instance check: the Record command acquires "Global\deskmic",
+    // the Transcribe --watch command acquires "Global\deskmic-transcriber".
+    // Other subcommands (status, install, etc.) don't need a mutex.
+    #[cfg(target_os = "windows")]
+    let _instance_mutex = {
+        let mutex_name = match &cli.command {
+            None | Some(Commands::Record) => Some("Global\\deskmic"),
+            Some(Commands::Transcribe { watch: true, .. }) => {
+                Some("Global\\deskmic-transcriber")
+            }
+            _ => None,
+        };
+
+        if let Some(name) = mutex_name {
+            match try_acquire_instance_mutex(name) {
+                Some(handle) => Some(handle),
+                None => {
+                    // Another instance is already running.
+                    if matches!(cli.command, None | Some(Commands::Record)) {
+                        show_already_running_message();
+                    }
+                    // For transcribe --watch launched as child process, just exit silently.
+                    std::process::exit(0);
+                }
+            }
+        } else {
+            None
+        }
+    };
 
     // Initialize logging
     tracing_subscriber::fmt()

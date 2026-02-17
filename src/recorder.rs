@@ -6,6 +6,7 @@
 // - Mic capture pipeline thread (Windows only)
 // - Teams monitor thread (Windows only)
 // - System tray thread (Windows only)
+// - Transcription child process watchdog thread (cross-platform)
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
@@ -52,7 +53,7 @@ pub fn run_recorder(config: Config, _config_path: Option<std::path::PathBuf>) ->
             .name("tray".into())
             .spawn(move || {
                 if let Err(e) =
-                    crate::tray::run_tray(recordings_dir, _config_path, tray_shutdown, tray_paused)
+                    crate::tray::run_tray(recordings_dir, _config_path.clone(), tray_shutdown, tray_paused)
                 {
                     tracing::error!("Tray error: {:?}", e);
                 }
@@ -78,6 +79,14 @@ pub fn run_recorder(config: Config, _config_path: Option<std::path::PathBuf>) ->
             crate::storage::run_cleanup_loop(cleanup_dir, cleanup_config, cleanup_shutdown);
         })?;
 
+    // --- Transcription child process watchdog thread ---
+    let transcribe_shutdown = shutdown.clone();
+    let transcribe_handle = std::thread::Builder::new()
+        .name("transcribe-watchdog".into())
+        .spawn(move || {
+            run_transcription_watchdog(transcribe_shutdown);
+        })?;
+
     // Drop our copy of the sender so the file writer's channel closes when
     // all capture threads finish.
     drop(sender);
@@ -101,9 +110,95 @@ pub fn run_recorder(config: Config, _config_path: Option<std::path::PathBuf>) ->
 
     let _ = cleanup_handle.join();
     let _ = writer_handle.join();
+    let _ = transcribe_handle.join();
 
     tracing::info!("Shutdown complete");
     Ok(())
+}
+
+/// Spawn `deskmic transcribe --watch` as a child process, respawning on crash.
+/// The child process acquires its own mutex ("Global\deskmic-transcriber") to
+/// prevent duplicates. When the parent's shutdown flag is set, the child is killed.
+fn run_transcription_watchdog(shutdown: Arc<AtomicBool>) {
+    const INITIAL_BACKOFF_SECS: u64 = 5;
+    const MAX_BACKOFF_SECS: u64 = 60;
+    let mut backoff_secs = INITIAL_BACKOFF_SECS;
+
+    let exe = match std::env::current_exe() {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::error!("Cannot find own executable for transcription child: {:?}", e);
+            return;
+        }
+    };
+
+    while !shutdown.load(Ordering::Relaxed) {
+        tracing::info!("Starting transcription child process");
+
+        let mut cmd = std::process::Command::new(&exe);
+        cmd.arg("transcribe").arg("--watch");
+
+        // Inherit stdout/stderr so transcription logs appear in the same log stream.
+        // Suppress stdin so the child doesn't try to read from the console.
+        cmd.stdin(std::process::Stdio::null());
+
+        match cmd.spawn() {
+            Ok(mut child) => {
+                // Reset backoff on successful spawn.
+                backoff_secs = INITIAL_BACKOFF_SECS;
+
+                // Poll the child periodically. If shutdown is requested, kill it.
+                loop {
+                    if shutdown.load(Ordering::Relaxed) {
+                        tracing::info!("Killing transcription child process");
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        return;
+                    }
+
+                    match child.try_wait() {
+                        Ok(Some(status)) => {
+                            if status.success() {
+                                tracing::info!("Transcription child exited normally");
+                            } else {
+                                tracing::warn!(
+                                    "Transcription child exited with status: {}",
+                                    status
+                                );
+                            }
+                            break; // exit inner loop to respawn
+                        }
+                        Ok(None) => {
+                            // Still running, check again soon.
+                            std::thread::sleep(std::time::Duration::from_secs(2));
+                        }
+                        Err(e) => {
+                            tracing::error!("Error checking transcription child: {:?}", e);
+                            break;
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::error!("Failed to spawn transcription child: {:?}", e);
+            }
+        }
+
+        // Backoff before respawning.
+        if !shutdown.load(Ordering::Relaxed) {
+            tracing::info!(
+                "Transcription child will restart in {}s",
+                backoff_secs
+            );
+            // Sleep in small increments so we can respond to shutdown quickly.
+            let deadline =
+                std::time::Instant::now() + std::time::Duration::from_secs(backoff_secs);
+            while std::time::Instant::now() < deadline && !shutdown.load(Ordering::Relaxed) {
+                std::thread::sleep(std::time::Duration::from_millis(500));
+            }
+            backoff_secs = (backoff_secs * 2).min(MAX_BACKOFF_SECS);
+        }
+    }
 }
 
 /// Spawn the mic capture pipeline thread with crash-recovery outer loop.
