@@ -137,5 +137,6 @@ fn main() -> anyhow::Result<()> {
         Commands::Summarize { period } => {
             deskmic::summarize::runner::run_summarize(&config, &period)
         }
+        Commands::Setup => deskmic::setup::run_setup(),
     }
 }

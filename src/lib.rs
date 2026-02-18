@@ -6,5 +6,6 @@ pub mod recorder;
 pub mod storage;
 pub mod summarize;
 pub mod transcribe;
+pub mod setup;
 #[cfg(target_os = "windows")]
 pub mod tray;
