@@ -47,6 +47,9 @@ pub enum Commands {
         #[arg(long, default_value = "daily")]
         period: SummarizePeriod,
     },
+
+    /// Interactive setup wizard (download model, create config, etc.)
+    Setup,
 }
 
 #[derive(Debug, Clone, ValueEnum)]
