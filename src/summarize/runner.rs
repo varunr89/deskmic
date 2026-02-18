@@ -6,6 +6,7 @@ use chrono::{Local, NaiveDate};
 use crate::cli::SummarizePeriod;
 use crate::config::Config;
 use crate::summarize::email::EmailClient;
+use crate::summarize::html;
 use crate::summarize::llm::LlmClient;
 use crate::summarize::prompt;
 use crate::transcribe::backend::Transcript;
@@ -39,8 +40,13 @@ pub fn run_summarize(config: &Config, period: &SummarizePeriod) -> Result<()> {
         // Try to send a short notification email
         match EmailClient::from_config(&config.summarization) {
             Ok(email_client) => {
-                let subject = format!("deskmic {} summary — {}", file_suffix, label);
-                match email_client.send_email(&subject, &no_content_msg, None) {
+                let subject = format!("deskmic {} — {}", file_suffix, label);
+                let html_body = html::markdown_to_html_email(
+                    &no_content_msg,
+                    &subject,
+                    &label,
+                );
+                match email_client.send_email(&subject, &no_content_msg, Some(&html_body)) {
                     Ok(_) => tracing::info!("Notification email sent"),
                     Err(e) => tracing::warn!("Failed to send notification email: {:#}", e),
                 }
@@ -69,8 +75,9 @@ pub fn run_summarize(config: &Config, period: &SummarizePeriod) -> Result<()> {
     // 5. Send email
     match EmailClient::from_config(&config.summarization) {
         Ok(email_client) => {
-            let subject = format!("deskmic {} summary — {}", file_suffix, label);
-            match email_client.send_email(&subject, &summary, None) {
+            let subject = format!("deskmic {} — {}", file_suffix, label);
+            let html_body = html::markdown_to_html_email(&summary, &subject, &label);
+            match email_client.send_email(&subject, &summary, Some(&html_body)) {
                 Ok(op_id) => {
                     tracing::info!("Summary email sent (operation: {})", op_id);
                 }
