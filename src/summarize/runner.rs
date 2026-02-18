@@ -3,7 +3,6 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use chrono::{Local, NaiveDate};
 
-use crate::cli::SummarizePeriod;
 use crate::config::Config;
 use crate::summarize::email::EmailClient;
 use crate::summarize::html;
@@ -12,8 +11,8 @@ use crate::summarize::prompt;
 use crate::transcribe::backend::Transcript;
 
 /// Main entry point for the summarize command.
-pub fn run_summarize(config: &Config, period: &SummarizePeriod) -> Result<()> {
-    let (dates, label, file_suffix) = resolve_dates(period);
+pub fn run_summarize(config: &Config, range: &str) -> Result<()> {
+    let (dates, label, file_suffix) = resolve_date_range(range)?;
 
     tracing::info!(
         "Summarizing {} ({} date(s): {})",
@@ -67,7 +66,8 @@ pub fn run_summarize(config: &Config, period: &SummarizePeriod) -> Result<()> {
     let llm = LlmClient::from_config(config)
         .context("Failed to initialize LLM client")?;
 
-    let summary = generate_summary(&llm, &label, &transcripts)?;
+    let custom_prompt = &config.summarization.system_prompt;
+    let summary = generate_summary(&llm, &label, &transcripts, custom_prompt)?;
 
     // 4. Save summary locally (always, even if email fails)
     save_summary(recordings_dir, &file_suffix, &summary)?;
@@ -97,18 +97,24 @@ pub fn run_summarize(config: &Config, period: &SummarizePeriod) -> Result<()> {
     Ok(())
 }
 
-/// Resolve the target dates and labels from the summarize period.
-fn resolve_dates(period: &SummarizePeriod) -> (Vec<NaiveDate>, String, String) {
+/// Parse a date range argument into target dates, a human-readable label, and a file suffix.
+///
+/// Accepted formats:
+/// - `"daily"` → yesterday
+/// - `"weekly"` → last 7 days
+/// - `"YYYY-MM-DD"` → that specific date
+/// - `"YYYY-MM-DD..YYYY-MM-DD"` → inclusive date range (max 90 days)
+pub fn resolve_date_range(arg: &str) -> Result<(Vec<NaiveDate>, String, String)> {
     let today = Local::now().date_naive();
 
-    match period {
-        SummarizePeriod::Daily => {
+    match arg {
+        "daily" => {
             let yesterday = today - chrono::Duration::days(1);
             let label = yesterday.format("%Y-%m-%d").to_string();
             let suffix = format!("{}-daily", label);
-            (vec![yesterday], label, suffix)
+            Ok((vec![yesterday], label, suffix))
         }
-        SummarizePeriod::Weekly => {
+        "weekly" => {
             let mut dates = Vec::new();
             for i in 1..=7 {
                 dates.push(today - chrono::Duration::days(i));
@@ -118,7 +124,63 @@ fn resolve_dates(period: &SummarizePeriod) -> (Vec<NaiveDate>, String, String) {
             let last = dates.last().unwrap().format("%Y-%m-%d").to_string();
             let label = format!("{} to {}", first, last);
             let suffix = format!("{}-weekly", last);
-            (dates, label, suffix)
+            Ok((dates, label, suffix))
+        }
+        _ if arg.contains("..") => {
+            let parts: Vec<&str> = arg.splitn(2, "..").collect();
+            if parts.len() != 2 {
+                anyhow::bail!(
+                    "Invalid date range '{}'. Expected YYYY-MM-DD..YYYY-MM-DD",
+                    arg
+                );
+            }
+            let start = NaiveDate::parse_from_str(parts[0], "%Y-%m-%d")
+                .with_context(|| format!("Invalid start date '{}'", parts[0]))?;
+            let end = NaiveDate::parse_from_str(parts[1], "%Y-%m-%d")
+                .with_context(|| format!("Invalid end date '{}'", parts[1]))?;
+
+            if end < start {
+                anyhow::bail!("End date {} is before start date {}", end, start);
+            }
+
+            let day_count = (end - start).num_days() + 1;
+            if day_count > 90 {
+                anyhow::bail!(
+                    "Date range spans {} days (max 90). Use a shorter range.",
+                    day_count
+                );
+            }
+
+            let mut dates = Vec::new();
+            let mut d = start;
+            while d <= end {
+                dates.push(d);
+                d += chrono::Duration::days(1);
+            }
+
+            let label = format!(
+                "{} to {}",
+                start.format("%Y-%m-%d"),
+                end.format("%Y-%m-%d")
+            );
+            let suffix = format!(
+                "{}-to-{}",
+                start.format("%Y-%m-%d"),
+                end.format("%Y-%m-%d")
+            );
+            Ok((dates, label, suffix))
+        }
+        _ => {
+            // Single date
+            let date = NaiveDate::parse_from_str(arg, "%Y-%m-%d").with_context(|| {
+                format!(
+                    "Invalid date range '{}'. Expected: daily, weekly, YYYY-MM-DD, or YYYY-MM-DD..YYYY-MM-DD",
+                    arg
+                )
+            })?;
+            let label = date.format("%Y-%m-%d").to_string();
+            let suffix = format!("{}-daily", label);
+            Ok((vec![date], label, suffix))
         }
     }
 }
@@ -167,6 +229,7 @@ fn generate_summary(
     llm: &LlmClient,
     date_label: &str,
     transcripts: &[Transcript],
+    custom_system_prompt: &str,
 ) -> Result<String> {
     // Estimate total tokens in transcript content
     let total_text: String = transcripts
@@ -184,7 +247,7 @@ fn generate_summary(
 
     if estimated_tokens <= MAX_SINGLE_PASS_TOKENS {
         // Single pass
-        let (system, user) = prompt::build_prompt(date_label, transcripts);
+        let (system, user) = prompt::build_prompt(date_label, transcripts, custom_system_prompt);
         let summary = llm
             .chat(&system, &user)
             .context("LLM summarization failed")?;
@@ -203,7 +266,7 @@ fn generate_summary(
     for (i, chunk) in chunks.iter().enumerate() {
         tracing::info!("Summarizing chunk {}/{}", i + 1, chunks.len());
         let chunk_label = format!("{} (part {}/{})", date_label, i + 1, chunks.len());
-        let (system, user) = prompt::build_prompt(&chunk_label, chunk);
+        let (system, user) = prompt::build_prompt(&chunk_label, chunk, custom_system_prompt);
         let partial = llm
             .chat(&system, &user)
             .with_context(|| format!("LLM summarization failed for chunk {}", i + 1))?;
@@ -253,16 +316,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_resolve_dates_daily() {
-        let (dates, label, suffix) = resolve_dates(&SummarizePeriod::Daily);
+    fn test_resolve_date_range_daily() {
+        let (dates, label, suffix) = resolve_date_range("daily").unwrap();
         assert_eq!(dates.len(), 1);
         assert!(label.len() == 10); // YYYY-MM-DD
         assert!(suffix.ends_with("-daily"));
     }
 
     #[test]
-    fn test_resolve_dates_weekly() {
-        let (dates, label, suffix) = resolve_dates(&SummarizePeriod::Weekly);
+    fn test_resolve_date_range_weekly() {
+        let (dates, label, suffix) = resolve_date_range("weekly").unwrap();
         assert_eq!(dates.len(), 7);
         assert!(label.contains(" to "));
         assert!(suffix.ends_with("-weekly"));
@@ -270,6 +333,42 @@ mod tests {
         for i in 1..dates.len() {
             assert!(dates[i] > dates[i - 1]);
         }
+    }
+
+    #[test]
+    fn test_resolve_date_range_specific_date() {
+        let (dates, label, suffix) = resolve_date_range("2026-02-15").unwrap();
+        assert_eq!(dates.len(), 1);
+        assert_eq!(dates[0], NaiveDate::from_ymd_opt(2026, 2, 15).unwrap());
+        assert_eq!(label, "2026-02-15");
+        assert_eq!(suffix, "2026-02-15-daily");
+    }
+
+    #[test]
+    fn test_resolve_date_range_range() {
+        let (dates, label, suffix) = resolve_date_range("2026-02-10..2026-02-14").unwrap();
+        assert_eq!(dates.len(), 5);
+        assert_eq!(dates[0], NaiveDate::from_ymd_opt(2026, 2, 10).unwrap());
+        assert_eq!(dates[4], NaiveDate::from_ymd_opt(2026, 2, 14).unwrap());
+        assert_eq!(label, "2026-02-10 to 2026-02-14");
+        assert_eq!(suffix, "2026-02-10-to-2026-02-14");
+    }
+
+    #[test]
+    fn test_resolve_date_range_single_day_range() {
+        let (dates, _label, _suffix) = resolve_date_range("2026-02-15..2026-02-15").unwrap();
+        assert_eq!(dates.len(), 1);
+    }
+
+    #[test]
+    fn test_resolve_date_range_invalid() {
+        assert!(resolve_date_range("garbage").is_err());
+        assert!(resolve_date_range("2026-02-15..2026-02-10").is_err()); // end before start
+    }
+
+    #[test]
+    fn test_resolve_date_range_too_long() {
+        assert!(resolve_date_range("2025-01-01..2025-12-31").is_err()); // 365 days > 90
     }
 
     #[test]

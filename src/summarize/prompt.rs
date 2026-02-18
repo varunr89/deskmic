@@ -76,13 +76,9 @@ fn format_hour_block(hour: u32, transcripts: &[&Transcript]) -> String {
     lines.join("\n")
 }
 
-/// Build the full prompt for a single summarization pass.
-/// `date_label` is something like "2026-02-17" or "2026-02-11 to 2026-02-17".
-pub fn build_prompt(
-    date_label: &str,
-    transcripts: &[Transcript],
-) -> (String, String) {
-    let system = format!(
+/// Returns the default system prompt with the given date label substituted in.
+fn default_system_prompt(date_label: &str) -> String {
+    format!(
         "You are a personal productivity assistant. You will be given raw voice transcripts \
          from a desk microphone recording of a workday ({date_label}). The transcripts contain \
          meetings, conversations, and ambient audio captured throughout the day.\n\n\
@@ -104,7 +100,23 @@ pub fn build_prompt(
          - If you recognize names, use them. Otherwise, use generic labels like \"Speaker A\".\n\
          - Keep the summary concise but complete. Target 200-500 words for a daily summary.",
         date_label = date_label,
-    );
+    )
+}
+
+/// Build the full prompt for a single summarization pass.
+/// `date_label` is something like "2026-02-17" or "2026-02-11 to 2026-02-17".
+/// `custom_system_prompt` overrides the default system prompt when non-empty;
+/// use `{date_label}` as a placeholder for the date.
+pub fn build_prompt(
+    date_label: &str,
+    transcripts: &[Transcript],
+    custom_system_prompt: &str,
+) -> (String, String) {
+    let system = if custom_system_prompt.is_empty() {
+        default_system_prompt(date_label)
+    } else {
+        custom_system_prompt.replace("{date_label}", date_label)
+    };
 
     let filtered: Vec<&Transcript> = transcripts
         .iter()
@@ -244,7 +256,7 @@ mod tests {
             make_transcript("mic_14-40-00.wav", "[BLANK_AUDIO]"),
             make_transcript("mic_15-00-00.wav", "Action item discussed"),
         ];
-        let (_system, user) = build_prompt("2026-02-17", &transcripts);
+        let (_system, user) = build_prompt("2026-02-17", &transcripts, "");
         assert!(user.contains("Important meeting topic"));
         assert!(user.contains("Action item discussed"));
         assert!(!user.contains("[BLANK_AUDIO]"));
@@ -289,5 +301,24 @@ mod tests {
         let chunks = chunk_transcripts(&transcripts, 100_000);
         assert_eq!(chunks.len(), 1);
         assert!(chunks[0].is_empty());
+    }
+
+    #[test]
+    fn test_build_prompt_custom_system_prompt() {
+        let transcripts = vec![
+            make_transcript("mic_14-30-00.wav", "Hello world"),
+        ];
+        let (system, _user) = build_prompt("2026-02-17", &transcripts, "Summarize {date_label} please");
+        assert_eq!(system, "Summarize 2026-02-17 please");
+    }
+
+    #[test]
+    fn test_build_prompt_empty_uses_default() {
+        let transcripts = vec![
+            make_transcript("mic_14-30-00.wav", "Hello world"),
+        ];
+        let (system, _user) = build_prompt("2026-02-17", &transcripts, "");
+        assert!(system.contains("personal productivity assistant"));
+        assert!(system.contains("2026-02-17"));
     }
 }
