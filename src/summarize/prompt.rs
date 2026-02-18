@@ -90,10 +90,15 @@ pub fn build_prompt(
          1. Write an **Executive Summary** (3-5 bullet points) of the most important topics, \
             decisions, and action items from the day.\n\
          2. Write a **Detailed Breakdown** organized by hour, summarizing what was discussed \
-            in each time block. Omit hours with no meaningful content.\n\n\
+            in each time block.\n\n\
          Guidelines:\n\
          - Focus on actionable information: decisions made, tasks assigned, key discussion points.\n\
          - Ignore background noise, small talk, and filler.\n\
+         - For the hourly breakdown, use a single ### heading per hour (e.g. \"### 13:00–13:59\") \
+            and present the full details for that hour as a cohesive narrative with bullet points. \
+            Do NOT further subdivide into minute-level sub-sections or time ranges within the hour.\n\
+         - Completely omit hours that contain only microphone testing, noise, silence, or no \
+            substantive discussion. Do not include them at all.\n\
          - Use clear, professional language.\n\
          - Format the output in Markdown.\n\
          - If you recognize names, use them. Otherwise, use generic labels like \"Speaker A\".\n\
