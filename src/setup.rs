@@ -407,12 +407,12 @@ fn create_scheduled_tasks() {
     let tasks = [
         (
             "deskmic-daily-summary",
-            format!("\"{}\" summarize --period daily", exe_str),
+            format!("\"{}\" summarize daily", exe_str),
             vec!["/SC", "DAILY", "/ST", "07:00"],
         ),
         (
             "deskmic-weekly-summary",
-            format!("\"{}\" summarize --period weekly", exe_str),
+            format!("\"{}\" summarize weekly", exe_str),
             vec!["/SC", "WEEKLY", "/D", "MON", "/ST", "07:00"],
         ),
     ];

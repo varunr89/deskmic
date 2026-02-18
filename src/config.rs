@@ -90,6 +90,9 @@ pub struct SummarizationConfig {
     pub sender_address: String,
     /// Recipient email address for summary delivery.
     pub recipient_address: String,
+    /// Custom system prompt for summarization. Use {date_label} as placeholder.
+    /// Leave empty to use the built-in default prompt.
+    pub system_prompt: String,
 }
 
 // --- Default implementations ---
@@ -199,6 +202,7 @@ impl Default for SummarizationConfig {
             acs_api_key: String::new(),
             sender_address: String::new(),
             recipient_address: String::new(),
+            system_prompt: String::new(),
         }
     }
 }
@@ -339,6 +343,9 @@ idle_check_interval_secs = 30
 # sender_address = "DoNotReply@your-domain.azurecomm.net"
 # Recipient email address for summary delivery.
 # recipient_address = "you@example.com"
+# Custom system prompt for the LLM summarizer. Use {{date_label}} as a placeholder
+# for the date range being summarized. Leave empty to use the built-in default.
+# system_prompt = ""
 "#,
             output_dir = output_dir_str
         )
