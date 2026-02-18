@@ -5,6 +5,7 @@ use anyhow::Result;
 use crate::config::Config;
 use crate::transcribe::backend::{Transcript, TranscriptionBackend};
 use crate::transcribe::state::TranscriptionState;
+use crate::transcribe::status::{TranscriberState, TranscriptionStatus};
 
 /// Find all unprocessed WAV files in the recordings directory.
 fn find_pending_files(recordings_dir: &Path, state: &TranscriptionState) -> Result<Vec<PathBuf>> {
@@ -128,19 +129,49 @@ fn save_transcript(
 
 /// Run one-shot transcription of all pending files.
 pub fn run_transcribe_oneshot(config: &Config, backend_override: Option<&str>) -> Result<()> {
+    let mut status = TranscriptionStatus::new();
+    run_transcribe_oneshot_with_status(config, backend_override, &mut status)
+}
+
+/// Run one-shot transcription, updating the provided status as it goes.
+fn run_transcribe_oneshot_with_status(
+    config: &Config,
+    backend_override: Option<&str>,
+    status: &mut TranscriptionStatus,
+) -> Result<()> {
     let recordings_dir = &config.output.directory;
     let mut state = TranscriptionState::load(recordings_dir)?;
     let pending = find_pending_files(recordings_dir, &state)?;
 
     if pending.is_empty() {
         tracing::info!("No pending files to transcribe");
+        status.state = TranscriberState::UpToDate;
+        status.queue_length = 0;
+        status.current_file = None;
+        status.touch();
+        let _ = status.write(recordings_dir);
         return Ok(());
     }
 
     tracing::info!("Found {} pending files", pending.len());
     let backend = build_backend(config, backend_override)?;
 
-    for path in &pending {
+    status.queue_length = pending.len();
+    status.state = TranscriberState::Transcribing;
+    status.touch();
+    let _ = status.write(recordings_dir);
+
+    for (i, path) in pending.iter().enumerate() {
+        let relative = path
+            .strip_prefix(recordings_dir)
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|_| path.display().to_string());
+
+        status.current_file = Some(relative);
+        status.queue_length = pending.len() - i;
+        status.touch();
+        let _ = status.write(recordings_dir);
+
         tracing::info!("Transcribing: {}", path.display());
         match backend.transcribe(path) {
             Ok(transcript) => {
@@ -149,6 +180,11 @@ pub fn run_transcribe_oneshot(config: &Config, backend_override: Option<&str>) -
                     transcript.file,
                     transcript.duration_secs
                 );
+                // Update session stats
+                status.session.files_done += 1;
+                status.session.audio_secs += transcript.duration_secs;
+                status.session.words += transcript.text.split_whitespace().count() as u64;
+
                 save_transcript(&transcript, path, recordings_dir, &mut state)?;
             }
             Err(e) => {
@@ -158,12 +194,23 @@ pub fn run_transcribe_oneshot(config: &Config, backend_override: Option<&str>) -
         }
     }
 
+    status.state = TranscriberState::UpToDate;
+    status.queue_length = 0;
+    status.current_file = None;
+    status.touch();
+    let _ = status.write(recordings_dir);
+
     Ok(())
 }
 
 /// Run idle-aware transcription daemon.
 pub fn run_transcribe_watch(config: &Config, backend_override: Option<&str>) -> Result<()> {
     let idle_config = &config.transcription.idle_watch;
+    let recordings_dir = &config.output.directory;
+    let mut status = TranscriptionStatus::new();
+
+    // Write initial status so the tray can see us immediately.
+    let _ = status.write(recordings_dir);
 
     loop {
         // Check CPU usage
@@ -174,14 +221,28 @@ pub fn run_transcribe_watch(config: &Config, backend_override: Option<&str>) -> 
 
         let cpu_usage: f32 =
             sys.cpus().iter().map(|c| c.cpu_usage()).sum::<f32>() / sys.cpus().len() as f32;
+        status.last_cpu_percent = cpu_usage;
 
         if cpu_usage < idle_config.cpu_threshold_percent {
             tracing::info!("System idle (CPU: {:.1}%), processing...", cpu_usage);
-            if let Err(e) = run_transcribe_oneshot(config, backend_override) {
-                tracing::error!("Transcription batch failed: {:?}", e);
+            match run_transcribe_oneshot_with_status(config, backend_override, &mut status) {
+                Ok(()) => {
+                    status.error_message = None;
+                }
+                Err(e) => {
+                    tracing::error!("Transcription batch failed: {:?}", e);
+                    status.state = TranscriberState::Error;
+                    status.error_message = Some(format!("{:#}", e));
+                    status.touch();
+                    let _ = status.write(recordings_dir);
+                }
             }
         } else {
             tracing::debug!("System busy (CPU: {:.1}%), waiting...", cpu_usage);
+            status.state = TranscriberState::Idle;
+            status.current_file = None;
+            status.touch();
+            let _ = status.write(recordings_dir);
         }
 
         std::thread::sleep(std::time::Duration::from_secs(
