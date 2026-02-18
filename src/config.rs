@@ -10,6 +10,8 @@ pub struct Config {
     pub targets: TargetsConfig,
     pub storage: StorageConfig,
     pub transcription: TranscriptionConfig,
+    #[serde(default)]
+    pub summarization: SummarizationConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -75,6 +77,21 @@ pub struct IdleWatchConfig {
     pub idle_check_interval_secs: u64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SummarizationConfig {
+    /// Azure OpenAI deployment name for chat completions (e.g. "gpt-4o").
+    pub deployment: String,
+    /// ACS Communication Services endpoint for sending email.
+    pub acs_endpoint: String,
+    /// ACS access key (or set DESKMIC_ACS_KEY environment variable).
+    pub acs_api_key: String,
+    /// Sender email address from the ACS Email verified domain.
+    pub sender_address: String,
+    /// Recipient email address for summary delivery.
+    pub recipient_address: String,
+}
+
 // --- Default implementations ---
 
 impl Default for Config {
@@ -86,6 +103,7 @@ impl Default for Config {
             targets: TargetsConfig::default(),
             storage: StorageConfig::default(),
             transcription: TranscriptionConfig::default(),
+            summarization: SummarizationConfig::default(),
         }
     }
 }
@@ -169,6 +187,18 @@ impl Default for IdleWatchConfig {
         Self {
             cpu_threshold_percent: 50.0,
             idle_check_interval_secs: 30,
+        }
+    }
+}
+
+impl Default for SummarizationConfig {
+    fn default() -> Self {
+        Self {
+            deployment: String::new(),
+            acs_endpoint: String::new(),
+            acs_api_key: String::new(),
+            sender_address: String::new(),
+            recipient_address: String::new(),
         }
     }
 }
@@ -296,6 +326,19 @@ model = "base.en"
 cpu_threshold_percent = 50.0
 # How often (in seconds) to check whether the system is idle for transcription.
 idle_check_interval_secs = 30
+
+[summarization]
+# Azure OpenAI deployment name for chat completions (used by 'deskmic summarize').
+# This reuses the endpoint and api_key from [transcription.azure].
+# deployment = "gpt-4o"
+# ACS (Azure Communication Services) endpoint for sending summary emails.
+# acs_endpoint = "https://your-acs.unitedstates.communication.azure.com"
+# ACS access key (or set DESKMIC_ACS_KEY environment variable).
+# acs_api_key = ""
+# Sender email address from the ACS Email verified domain.
+# sender_address = "DoNotReply@your-domain.azurecomm.net"
+# Recipient email address for summary delivery.
+# recipient_address = "you@example.com"
 "#,
             output_dir = output_dir_str
         )
@@ -466,5 +509,6 @@ mod tests {
         assert!(content.contains("[transcription]"));
         assert!(content.contains("[transcription.azure]"));
         assert!(content.contains("[transcription.idle_watch]"));
+        assert!(content.contains("[summarization]"));
     }
 }

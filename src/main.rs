@@ -134,5 +134,8 @@ fn main() -> anyhow::Result<()> {
                 deskmic::transcribe::runner::run_transcribe_oneshot(&config, backend.as_deref())
             }
         }
+        Commands::Summarize { period } => {
+            deskmic::summarize::runner::run_summarize(&config, &period)
+        }
     }
 }

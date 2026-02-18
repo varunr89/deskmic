@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
@@ -40,4 +40,19 @@ pub enum Commands {
         #[arg(long)]
         backend: Option<String>,
     },
+
+    /// Summarize transcripts and email the summary
+    Summarize {
+        /// Time period to summarize
+        #[arg(long, default_value = "daily")]
+        period: SummarizePeriod,
+    },
+}
+
+#[derive(Debug, Clone, ValueEnum)]
+pub enum SummarizePeriod {
+    /// Summarize yesterday's transcripts
+    Daily,
+    /// Summarize the last 7 days of transcripts
+    Weekly,
 }
