@@ -2,6 +2,7 @@
 *.wav
 *.bin
 .deskmic-state.json
+deskmic.toml
 
 .commitmsg
 .worktrees
