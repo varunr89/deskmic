@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::fmt;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -62,12 +63,22 @@ pub struct TranscriptionConfig {
     pub idle_watch: IdleWatchConfig,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AzureConfig {
     pub endpoint: String,
     pub api_key: String,
     pub deployment: String,
+}
+
+impl fmt::Debug for AzureConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AzureConfig")
+            .field("endpoint", &self.endpoint)
+            .field("api_key", &"[REDACTED]")
+            .field("deployment", &self.deployment)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -77,7 +88,7 @@ pub struct IdleWatchConfig {
     pub idle_check_interval_secs: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SummarizationConfig {
     /// Azure OpenAI deployment name for chat completions (e.g. "gpt-4o").
@@ -93,6 +104,19 @@ pub struct SummarizationConfig {
     /// Custom system prompt for summarization. Use {date_label} as placeholder.
     /// Leave empty to use the built-in default prompt.
     pub system_prompt: String,
+}
+
+impl fmt::Debug for SummarizationConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SummarizationConfig")
+            .field("deployment", &self.deployment)
+            .field("acs_endpoint", &self.acs_endpoint)
+            .field("acs_api_key", &"[REDACTED]")
+            .field("sender_address", &self.sender_address)
+            .field("recipient_address", &self.recipient_address)
+            .field("system_prompt", &self.system_prompt)
+            .finish()
+    }
 }
 
 // --- Default implementations ---
@@ -517,5 +541,65 @@ mod tests {
         assert!(content.contains("[transcription.azure]"));
         assert!(content.contains("[transcription.idle_watch]"));
         assert!(content.contains("[summarization]"));
+    }
+
+    #[test]
+    fn test_azure_config_debug_redacts_api_key() {
+        let config = AzureConfig {
+            endpoint: "https://example.openai.azure.com".to_string(),
+            api_key: "super-secret-key-12345".to_string(),
+            deployment: "whisper".to_string(),
+        };
+        let debug_output = format!("{:?}", config);
+        assert!(
+            !debug_output.contains("super-secret-key-12345"),
+            "Debug output should not contain the API key"
+        );
+        assert!(
+            debug_output.contains("[REDACTED]"),
+            "Debug output should show [REDACTED] for api_key"
+        );
+        assert!(
+            debug_output.contains("https://example.openai.azure.com"),
+            "Debug output should still show the endpoint"
+        );
+    }
+
+    #[test]
+    fn test_summarization_config_debug_redacts_acs_key() {
+        let config = SummarizationConfig {
+            acs_api_key: "acs-super-secret-key-67890".to_string(),
+            acs_endpoint: "https://my-acs.communication.azure.com".to_string(),
+            ..Default::default()
+        };
+        let debug_output = format!("{:?}", config);
+        assert!(
+            !debug_output.contains("acs-super-secret-key-67890"),
+            "Debug output should not contain the ACS API key"
+        );
+        assert!(
+            debug_output.contains("[REDACTED]"),
+            "Debug output should show [REDACTED] for acs_api_key"
+        );
+        assert!(
+            debug_output.contains("https://my-acs.communication.azure.com"),
+            "Debug output should still show the endpoint"
+        );
+    }
+
+    #[test]
+    fn test_config_debug_redacts_nested_secrets() {
+        let mut config = Config::default();
+        config.transcription.azure.api_key = "nested-secret-key".to_string();
+        config.summarization.acs_api_key = "nested-acs-secret".to_string();
+        let debug_output = format!("{:?}", config);
+        assert!(
+            !debug_output.contains("nested-secret-key"),
+            "Config debug should not contain nested Azure API key"
+        );
+        assert!(
+            !debug_output.contains("nested-acs-secret"),
+            "Config debug should not contain nested ACS API key"
+        );
     }
 }

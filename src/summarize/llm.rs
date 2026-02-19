@@ -34,12 +34,21 @@ struct ChatUsage {
     total_tokens: u64,
 }
 
-#[derive(Debug)]
 pub struct LlmClient {
     endpoint: String,
     api_key: String,
     deployment: String,
     client: reqwest::blocking::Client,
+}
+
+impl std::fmt::Debug for LlmClient {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LlmClient")
+            .field("endpoint", &self.endpoint)
+            .field("api_key", &"[REDACTED]")
+            .field("deployment", &self.deployment)
+            .finish_non_exhaustive()
+    }
 }
 
 impl LlmClient {
