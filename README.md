@@ -1,6 +1,6 @@
 # deskmic
 
-Always-on Windows 11 audio recorder that captures microphone and Microsoft Teams process audio using WASAPI and Application Loopback Capture. Uses Silero VAD with a ring buffer to only save speech segments as WAV files. Includes an async batch transcription pipeline with pluggable backends (local whisper-rs and Azure OpenAI Whisper API). Lightweight, open-source, single portable `.exe`.
+Always-on Windows 11 audio recorder that captures microphone and Microsoft Teams process audio using WASAPI and Application Loopback Capture. Uses Silero VAD with a ring buffer to only save speech segments as WAV files. Includes an async batch transcription pipeline with pluggable backends (local whisper-rs and Azure OpenAI Whisper API), plus LLM-powered daily/weekly email summaries of your transcripts. Lightweight, open-source, single portable `.exe`.
 
 When recording, deskmic runs a system tray icon with controls to pause/resume recording, open the recordings folder, and quit. It automatically recovers from audio device changes and sleep/wake cycles with exponential backoff.
 
@@ -19,6 +19,23 @@ To run on startup:
 ```
 deskmic install
 ```
+
+### Interactive setup wizard
+
+For first-time setup, run:
+
+```
+deskmic setup
+```
+
+The wizard walks you through four steps:
+
+1. **Download Whisper model** — choose and download a GGML model (`tiny.en`, `base.en`, or `small.en`) from Hugging Face.
+2. **Generate config file** — create a `deskmic.toml` next to the executable with sensible defaults.
+3. **Email summaries (optional)** — enter your Azure OpenAI and Azure Communication Services credentials to enable daily/weekly email summaries.
+4. **Windows startup (optional)** — add deskmic to the Windows Startup folder.
+
+If you enable email summaries, the wizard also creates Windows Scheduled Tasks for automatic daily (7 AM) and weekly (Monday 7 AM) summary delivery.
 
 ## Configuration
 
@@ -68,6 +85,14 @@ deployment = ""
 [transcription.idle_watch]
 cpu_threshold_percent = 20.0
 idle_check_interval_secs = 30
+
+[summarization]
+# deployment = "gpt-4o"                  # Azure OpenAI chat deployment (reuses [transcription.azure] endpoint/key)
+# acs_endpoint = "https://your-acs.unitedstates.communication.azure.com"
+# acs_api_key = ""                        # or set DESKMIC_ACS_KEY env var
+# sender_address = "DoNotReply@your-domain.azurecomm.net"
+# recipient_address = "you@example.com"
+# system_prompt = ""                      # custom LLM prompt; use {date_label} placeholder
 ```
 
 ## CLI reference
@@ -92,6 +117,8 @@ deskmic [OPTIONS] [COMMAND]
 | `transcribe` | Transcribe pending audio files (one-shot) |
 | `transcribe --watch` | Run transcription as idle-aware daemon |
 | `transcribe --backend <name>` | Force a specific backend (`local` or `azure`) |
+| `summarize [range]` | Summarize transcripts and email the result |
+| `setup` | Interactive setup wizard (download model, create config, etc.) |
 | `install` | Add deskmic to Windows Startup folder |
 | `uninstall` | Remove deskmic from Windows Startup folder |
 | `status` | Show recording status, disk usage, file count |
@@ -129,6 +156,48 @@ deployment = "whisper-1"
 ```
 
 The API key can also be set via the `DESKMIC_AZURE_KEY` environment variable instead of putting it in the config file.
+
+## Summarization setup
+
+The `summarize` command uses Azure OpenAI to generate an LLM-powered summary of your transcripts and (optionally) emails it via Azure Communication Services (ACS).
+
+### Prerequisites
+
+- An **Azure OpenAI** resource with a chat completion deployment (e.g. `gpt-4o`). The summarizer reuses the same endpoint and API key from `[transcription.azure]`.
+- An **Azure Communication Services** resource with an Email-verified domain (for email delivery).
+
+### Configuration
+
+Add a `[summarization]` section to your `deskmic.toml`:
+
+```toml
+[transcription.azure]
+endpoint = "https://your-resource.openai.azure.com"
+api_key = "your-azure-openai-key"
+deployment = "whisper-1"
+
+[summarization]
+deployment = "gpt-4o"
+acs_endpoint = "https://your-acs.unitedstates.communication.azure.com"
+acs_api_key = "your-acs-access-key"
+sender_address = "DoNotReply@your-domain.azurecomm.net"
+recipient_address = "you@example.com"
+```
+
+The ACS API key can also be set via the `DESKMIC_ACS_KEY` environment variable.
+
+### Usage
+
+```
+deskmic summarize              # summarize yesterday's transcripts (default: "daily")
+deskmic summarize weekly       # summarize the last 7 days
+deskmic summarize 2026-02-15   # summarize a specific date
+deskmic summarize 2026-02-10..2026-02-14  # summarize a date range (max 90 days)
+```
+
+Summaries are always saved locally as Markdown files under `recordings/summaries/`, even if email delivery is not configured or fails.
+
+> **Tip:** Run `deskmic setup` to configure summarization credentials interactively — no manual config editing needed.
 
 ## Building from source
 
