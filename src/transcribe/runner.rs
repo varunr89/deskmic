@@ -28,7 +28,7 @@ fn find_pending_files(recordings_dir: &Path, state: &TranscriptionState) -> Resu
                 let relative = path
                     .strip_prefix(recordings_dir)?
                     .to_string_lossy()
-                    .to_string();
+                    .replace('\\', "/");
                 if !state.is_transcribed(&relative) {
                     pending.push(path);
                 }
@@ -116,11 +116,11 @@ fn save_transcript(
     use std::io::Write;
     writeln!(file, "{}", serde_json::to_string(transcript)?)?;
 
-    // Mark as transcribed
+    // Mark as transcribed (normalize to forward slashes for cross-platform consistency)
     let relative = audio_path
         .strip_prefix(recordings_dir)?
         .to_string_lossy()
-        .to_string();
+        .replace('\\', "/");
     state.mark_transcribed(relative);
     state.save(recordings_dir)?;
 
