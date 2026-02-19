@@ -62,12 +62,27 @@ pub fn run_recorder(config: Config, _config_path: Option<std::path::PathBuf>) ->
 
     // --- Mic capture pipeline thread (Windows only) ---
     #[cfg(target_os = "windows")]
-    let mic_handle = spawn_mic_pipeline(&config, sender.clone(), shutdown.clone(), paused.clone())?;
+    let mic_alive = Arc::new(AtomicBool::new(true));
+    #[cfg(target_os = "windows")]
+    let mic_handle = spawn_mic_pipeline(
+        &config,
+        sender.clone(),
+        shutdown.clone(),
+        paused.clone(),
+        mic_alive.clone(),
+    )?;
 
     // --- Teams monitor thread (Windows only) ---
     #[cfg(target_os = "windows")]
-    let teams_handle =
-        spawn_teams_monitor(&config, sender.clone(), shutdown.clone(), paused.clone())?;
+    let teams_alive = Arc::new(AtomicBool::new(true));
+    #[cfg(target_os = "windows")]
+    let teams_handle = spawn_teams_monitor(
+        &config,
+        sender.clone(),
+        shutdown.clone(),
+        paused.clone(),
+        teams_alive.clone(),
+    )?;
 
     // --- Cleanup thread (cross-platform) ---
     let cleanup_dir = config.output.directory.clone();
@@ -87,6 +102,47 @@ pub fn run_recorder(config: Config, _config_path: Option<std::path::PathBuf>) ->
             run_transcription_watchdog(transcribe_shutdown);
         })?;
 
+    // --- Pipeline health watchdog thread ---
+    // Monitors pipeline threads and triggers self-restart if any die.
+    #[cfg(target_os = "windows")]
+    let watchdog_handle = {
+        let wd_shutdown = shutdown.clone();
+        let wd_mic_alive = mic_alive.clone();
+        let wd_teams_alive = teams_alive.clone();
+        let mic_enabled = config.targets.mic_enabled;
+
+        std::thread::Builder::new()
+            .name("watchdog".into())
+            .spawn(move || {
+                crate::monitoring::run_watchdog(wd_shutdown, move || {
+                    if mic_enabled && !wd_mic_alive.load(Ordering::Relaxed) {
+                        return Some("mic-capture".to_string());
+                    }
+                    if !wd_teams_alive.load(Ordering::Relaxed) {
+                        return Some("teams-monitor".to_string());
+                    }
+                    None
+                });
+            })?
+    };
+
+    // --- Recording gap timer thread ---
+    let gap_timer_handle = {
+        let gap_shutdown = shutdown.clone();
+        let gap_mins = config.monitoring.recording_gap_alert_mins;
+        let recordings_dir = config.output.directory.clone();
+
+        std::thread::Builder::new()
+            .name("gap-timer".into())
+            .spawn(move || {
+                crate::monitoring::run_gap_timer(
+                    recordings_dir,
+                    gap_mins,
+                    gap_shutdown,
+                );
+            })?
+    };
+
     // Drop our copy of the sender so the file writer's channel closes when
     // all capture threads finish.
     drop(sender);
@@ -98,7 +154,7 @@ pub fn run_recorder(config: Config, _config_path: Option<std::path::PathBuf>) ->
 
     tracing::info!("Shutting down...");
 
-    // Join threads. On non-Windows the mic/teams/tray handles don't exist.
+    // Join threads. On non-Windows the mic/teams/tray/watchdog handles don't exist.
     #[cfg(target_os = "windows")]
     {
         if let Some(h) = mic_handle {
@@ -106,11 +162,13 @@ pub fn run_recorder(config: Config, _config_path: Option<std::path::PathBuf>) ->
         }
         let _ = teams_handle.join();
         let _ = tray_handle.join();
+        let _ = watchdog_handle.join();
     }
 
     let _ = cleanup_handle.join();
     let _ = writer_handle.join();
     let _ = transcribe_handle.join();
+    let _ = gap_timer_handle.join();
 
     tracing::info!("Shutdown complete");
     Ok(())
@@ -209,8 +267,10 @@ fn spawn_mic_pipeline(
     sender: mpsc::Sender<AudioMessage>,
     shutdown: Arc<AtomicBool>,
     paused: Arc<AtomicBool>,
+    alive: Arc<AtomicBool>,
 ) -> Result<Option<std::thread::JoinHandle<()>>> {
     if !config.targets.mic_enabled {
+        alive.store(false, Ordering::Relaxed); // not started, so not "alive"
         return Ok(None);
     }
 
@@ -259,7 +319,18 @@ fn spawn_mic_pipeline(
                                     shutdown.clone(),
                                     paused.clone(),
                                 ) {
-                                    Ok(()) => break,
+                                    Ok(()) => {
+                                        // Pipeline exited cleanly (shutdown flag set) — this is normal.
+                                        // But if shutdown wasn't requested, this is unexpected and we
+                                        // should retry (the pipeline shouldn't exit on its own).
+                                        if shutdown.load(Ordering::Relaxed) {
+                                            break;
+                                        }
+                                        tracing::warn!(
+                                            "Mic pipeline exited unexpectedly, retrying in {}s",
+                                            backoff_secs
+                                        );
+                                    }
                                     Err(e) => {
                                         tracing::error!(
                                             "Mic pipeline error: {:?}, restarting in {}s",
@@ -296,6 +367,9 @@ fn spawn_mic_pipeline(
                     backoff_secs = (backoff_secs * 2).min(MAX_BACKOFF_SECS);
                 }
             }
+
+            // Thread is exiting — mark as not alive.
+            alive.store(false, Ordering::Relaxed);
         })?;
 
     Ok(Some(handle))
@@ -308,6 +382,7 @@ fn spawn_teams_monitor(
     sender: mpsc::Sender<AudioMessage>,
     shutdown: Arc<AtomicBool>,
     paused: Arc<AtomicBool>,
+    alive: Arc<AtomicBool>,
 ) -> Result<std::thread::JoinHandle<()>> {
     let teams_config = config.clone();
     let handle = std::thread::Builder::new()
@@ -321,6 +396,8 @@ fn spawn_teams_monitor(
             ) {
                 tracing::error!("Teams monitor error: {:?}", e);
             }
+            // Thread is exiting — mark as not alive.
+            alive.store(false, Ordering::Relaxed);
         })?;
     Ok(handle)
 }

@@ -141,9 +141,17 @@ mod tests {
 
     #[test]
     fn test_make_file_path_without_date() {
-        let path = make_file_path(Path::new("/tmp/recordings"), "teams", false);
-        let path_str = path.to_str().unwrap();
-        assert!(path_str.starts_with("/tmp/recordings/teams_"));
+        let base = Path::new("/tmp/recordings");
+        let path = make_file_path(base, "teams", false);
+        let path_str = path.to_string_lossy();
+        let expected_prefix = format!("{}{}", base.display(), std::path::MAIN_SEPARATOR);
+        assert!(
+            path_str.starts_with(&expected_prefix),
+            "expected path to start with '{}', got '{}'",
+            expected_prefix,
+            path_str
+        );
+        assert!(path_str.contains("teams_"));
         assert!(path_str.ends_with(".wav"));
         assert!(!path_str.contains(&Local::now().format("%Y-%m-%d").to_string()));
     }
