@@ -2,6 +2,7 @@ pub mod audio;
 pub mod cli;
 pub mod commands;
 pub mod config;
+pub mod monitoring;
 pub mod recorder;
 pub mod storage;
 pub mod summarize;

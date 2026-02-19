@@ -23,6 +23,53 @@ pub fn find_teams_pid(process_names: &[String]) -> Option<u32> {
     None
 }
 
+/// Checks whether a process with the given PID is still alive.
+pub fn is_process_alive(pid: u32) -> bool {
+    let refreshes = RefreshKind::nothing().with_processes(ProcessRefreshKind::nothing());
+    let system = System::new_with_specifics(refreshes);
+    system
+        .process(sysinfo::Pid::from_u32(pid))
+        .is_some()
+}
+
+/// Action to take when evaluating Teams PID changes.
+#[derive(Debug, PartialEq)]
+pub enum PidAction {
+    /// No Teams process found, and none was active. Do nothing.
+    NoChange,
+    /// Teams just appeared — start capture on this PID.
+    StartCapture(u32),
+    /// Teams process disappeared — stop capture.
+    StopCapture,
+    /// A different PID was found but old PID is still alive — keep current capture.
+    KeepCurrent,
+    /// Old PID is dead and a new one is available — tear down and restart.
+    RestartCapture(u32),
+}
+
+/// Determines what action to take given the current active PID, the newly found PID,
+/// and whether the old process is still alive. This is the core decision logic
+/// extracted from `run_teams_monitor` for testability.
+pub fn decide_pid_action(
+    active_pid: Option<u32>,
+    found_pid: Option<u32>,
+    is_old_alive: impl Fn(u32) -> bool,
+) -> PidAction {
+    match (active_pid, found_pid) {
+        (None, None) => PidAction::NoChange,
+        (None, Some(pid)) => PidAction::StartCapture(pid),
+        (Some(_), None) => PidAction::StopCapture,
+        (Some(old), Some(new)) if old == new => PidAction::NoChange,
+        (Some(old), Some(new)) => {
+            if is_old_alive(old) {
+                PidAction::KeepCurrent
+            } else {
+                PidAction::RestartCapture(new)
+            }
+        }
+    }
+}
+
 // --- Windows-only monitor that spawns the Teams capture pipeline ---
 
 #[cfg(target_os = "windows")]
@@ -38,13 +85,17 @@ mod monitor {
     use crate::audio::vad::Vad;
     use crate::config::Config;
 
-    use super::find_teams_pid;
+    use super::{decide_pid_action, find_teams_pid, is_process_alive, PidAction};
 
     /// Monitors for Teams process and spawns/stops capture pipeline accordingly.
     ///
     /// Polls every 5 seconds for the Teams process. When detected, creates a
     /// `TeamsCapture` and runs the audio pipeline. When the process disappears,
     /// shuts down the pipeline and waits for the next appearance.
+    ///
+    /// Uses `decide_pid_action` to handle PID changes correctly: if the old PID
+    /// is still alive but a different PID is found (Teams runs multiple processes),
+    /// we keep the current capture instead of tearing down and restarting.
     pub fn run_teams_monitor(
         config: Config,
         sender: Sender<AudioMessage>,
@@ -59,8 +110,10 @@ mod monitor {
             std::thread::sleep(std::time::Duration::from_secs(5));
             let current_pid = find_teams_pid(&config.targets.processes);
 
-            match (active_pid, current_pid) {
-                (None, Some(pid)) => {
+            let action = decide_pid_action(active_pid, current_pid, is_process_alive);
+
+            match action {
+                PidAction::StartCapture(pid) => {
                     // Teams just started — spawn capture pipeline.
                     tracing::info!("Teams detected (PID {}), starting capture", pid);
                     let pipe_shutdown = Arc::new(AtomicBool::new(false));
@@ -130,7 +183,7 @@ mod monitor {
                     pipeline_shutdown = Some(pipe_shutdown);
                     pipeline_handle = Some(handle);
                 }
-                (Some(_), None) => {
+                PidAction::StopCapture => {
                     // Teams process gone — stop capture.
                     tracing::info!("Teams process gone, stopping capture");
                     if let Some(ps) = pipeline_shutdown.take() {
@@ -141,12 +194,11 @@ mod monitor {
                     }
                     active_pid = None;
                 }
-                (Some(old_pid), Some(new_pid)) if old_pid != new_pid => {
-                    // Teams PID changed (process restarted) — restart capture.
+                PidAction::RestartCapture(new_pid) => {
+                    // Old PID is dead, new PID found — tear down and restart.
                     tracing::info!(
-                        "Teams PID changed {} -> {}, restarting capture",
-                        old_pid,
-                        new_pid
+                        "Teams PID changed (old process dead), restarting capture on PID {}",
+                        new_pid,
                     );
                     if let Some(ps) = pipeline_shutdown.take() {
                         ps.store(true, Ordering::Relaxed);
@@ -157,7 +209,15 @@ mod monitor {
                     // Set active_pid to None so next iteration picks up the new PID.
                     active_pid = None;
                 }
-                _ => {
+                PidAction::KeepCurrent => {
+                    // Different PID found but old PID is still alive — ignore.
+                    // This fixes #13: Teams runs multiple processes, non-deterministic
+                    // iteration order causes different PIDs each poll.
+                    tracing::debug!(
+                        "Teams returned different PID but active process still alive, keeping current capture"
+                    );
+                }
+                PidAction::NoChange => {
                     // No change — continue polling.
                 }
             }
@@ -191,5 +251,49 @@ mod tests {
     fn test_find_empty_process_list() {
         let pid = find_teams_pid(&[]);
         assert!(pid.is_none());
+    }
+
+    #[test]
+    fn test_pid_action_no_teams_no_active() {
+        let action = decide_pid_action(None, None, |_| false);
+        assert_eq!(action, PidAction::NoChange);
+    }
+
+    #[test]
+    fn test_pid_action_teams_just_started() {
+        let action = decide_pid_action(None, Some(1234), |_| false);
+        assert_eq!(action, PidAction::StartCapture(1234));
+    }
+
+    #[test]
+    fn test_pid_action_teams_disappeared() {
+        let action = decide_pid_action(Some(1234), None, |_| false);
+        assert_eq!(action, PidAction::StopCapture);
+    }
+
+    #[test]
+    fn test_pid_action_same_pid_no_change() {
+        let action = decide_pid_action(Some(1234), Some(1234), |_| true);
+        assert_eq!(action, PidAction::NoChange);
+    }
+
+    #[test]
+    fn test_pid_action_different_pid_old_alive_keeps_current() {
+        // This is the key fix for #13: old PID alive + different PID found = keep current
+        let action = decide_pid_action(Some(1234), Some(5678), |pid| {
+            assert_eq!(pid, 1234); // should check the OLD pid
+            true // old pid is alive
+        });
+        assert_eq!(action, PidAction::KeepCurrent);
+    }
+
+    #[test]
+    fn test_pid_action_different_pid_old_dead_restarts() {
+        // Old PID is dead + different PID found = restart on new PID
+        let action = decide_pid_action(Some(1234), Some(5678), |pid| {
+            assert_eq!(pid, 1234);
+            false // old pid is dead
+        });
+        assert_eq!(action, PidAction::RestartCapture(5678));
     }
 }

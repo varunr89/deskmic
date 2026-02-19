@@ -13,6 +13,8 @@ pub struct Config {
     pub transcription: TranscriptionConfig,
     #[serde(default)]
     pub summarization: SummarizationConfig,
+    #[serde(default)]
+    pub monitoring: MonitoringConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -119,6 +121,21 @@ impl fmt::Debug for SummarizationConfig {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MonitoringConfig {
+    /// Minutes without a new WAV file before firing a toast notification.
+    pub recording_gap_alert_mins: u32,
+}
+
+impl Default for MonitoringConfig {
+    fn default() -> Self {
+        Self {
+            recording_gap_alert_mins: 30,
+        }
+    }
+}
+
 // --- Default implementations ---
 
 impl Default for Config {
@@ -131,6 +148,7 @@ impl Default for Config {
             storage: StorageConfig::default(),
             transcription: TranscriptionConfig::default(),
             summarization: SummarizationConfig::default(),
+            monitoring: MonitoringConfig::default(),
         }
     }
 }
@@ -370,6 +388,11 @@ idle_check_interval_secs = 30
 # Custom system prompt for the LLM summarizer. Use {{date_label}} as a placeholder
 # for the date range being summarized. Leave empty to use the built-in default.
 # system_prompt = ""
+
+[monitoring]
+# Minutes without a new WAV recording before showing a toast notification.
+# Set to 0 to disable gap alerts.
+recording_gap_alert_mins = 30
 "#,
             output_dir = output_dir_str
         )
@@ -398,6 +421,7 @@ mod tests {
         assert_eq!(config.targets.processes, vec!["ms-teams.exe"]);
         assert_eq!(config.transcription.backend, "local");
         assert_eq!(config.transcription.model, "base.en");
+        assert_eq!(config.monitoring.recording_gap_alert_mins, 30);
     }
 
     #[test]
@@ -541,6 +565,7 @@ mod tests {
         assert!(content.contains("[transcription.azure]"));
         assert!(content.contains("[transcription.idle_watch]"));
         assert!(content.contains("[summarization]"));
+        assert!(content.contains("[monitoring]"));
     }
 
     #[test]
@@ -601,5 +626,25 @@ mod tests {
             !debug_output.contains("nested-acs-secret"),
             "Config debug should not contain nested ACS API key"
         );
+    }
+
+    #[test]
+    fn test_monitoring_config_from_toml() {
+        let toml_str = r#"
+            [monitoring]
+            recording_gap_alert_mins = 15
+        "#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.monitoring.recording_gap_alert_mins, 15);
+    }
+
+    #[test]
+    fn test_monitoring_config_defaults_when_absent() {
+        let toml_str = r#"
+            [capture]
+            sample_rate = 16000
+        "#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.monitoring.recording_gap_alert_mins, 30);
     }
 }

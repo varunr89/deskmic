@@ -71,11 +71,8 @@ pub fn run_capture_pipeline(
         let samples = match capture_fn()? {
             Some(s) => s,
             None => {
-                tracing::warn!(
-                    "{}: capture returned None, device may be invalidated",
-                    source_name
-                );
-                break;
+                // Empty buffer from WASAPI — normal, not fatal. Just try again.
+                continue;
             }
         };
 
@@ -175,8 +172,10 @@ mod tests {
     fn test_pipeline_detects_speech_and_silence() {
         let (tx, rx) = mpsc::channel();
         let shutdown = Arc::new(AtomicBool::new(false));
+        let shutdown_clone = shutdown.clone();
 
-        // We'll feed: 2 chunks of silence, 2 chunks of speech, then enough silence to trigger end.
+        // We'll feed: 2 chunks of silence, 2 chunks of speech, then enough silence to trigger end,
+        // then set shutdown flag to stop the loop.
         let chunk_size = 4;
         let silence_chunk = vec![0i16; chunk_size];
         let speech_chunk = vec![100i16; chunk_size];
@@ -187,23 +186,26 @@ mod tests {
         let pre_speech_buffer_secs = 0.5; // ring buffer holds 4 samples
         let silence_threshold_secs = 0.5; // 4 samples of silence triggers end
 
-        let mut chunks: Vec<Option<Vec<i16>>> = vec![
-            Some(silence_chunk.clone()), // silence -> ring buffer
-            Some(silence_chunk.clone()), // silence -> ring buffer (overwrites some)
-            Some(speech_chunk.clone()),  // speech start
-            Some(speech_chunk.clone()),  // speech continue
-            Some(silence_chunk.clone()), // silence during speech -> triggers end
-            None,                        // signals capture ended
+        let mut chunks: Vec<Vec<i16>> = vec![
+            silence_chunk.clone(), // silence -> ring buffer
+            silence_chunk.clone(), // silence -> ring buffer (overwrites some)
+            speech_chunk.clone(),  // speech start
+            speech_chunk.clone(),  // speech continue
+            silence_chunk.clone(), // silence during speech -> triggers end
         ];
         chunks.reverse(); // so we can pop from the end
 
         let chunks = std::cell::RefCell::new(chunks);
 
-        let capture_fn = || -> Result<Option<Vec<i16>>> {
+        let capture_fn = move || -> Result<Option<Vec<i16>>> {
             let mut c = chunks.borrow_mut();
             match c.pop() {
-                Some(val) => Ok(val),
-                None => Ok(None),
+                Some(val) => Ok(Some(val)),
+                None => {
+                    // All chunks consumed — signal shutdown so pipeline exits.
+                    shutdown_clone.store(true, Ordering::Relaxed);
+                    Ok(None)
+                }
             }
         };
 
@@ -297,28 +299,31 @@ mod tests {
     fn test_pipeline_paused_skips_processing() {
         let (tx, rx) = mpsc::channel();
         let shutdown = Arc::new(AtomicBool::new(false));
+        let shutdown_clone = shutdown.clone();
         let paused = Arc::new(AtomicBool::new(true)); // start paused
 
         let chunk_size = 4;
         let speech_chunk = vec![100i16; chunk_size];
 
         // Feed several speech chunks (which would trigger SpeechStart if not paused),
-        // then None to end the loop.
-        let mut chunks: Vec<Option<Vec<i16>>> = vec![
-            Some(speech_chunk.clone()),
-            Some(speech_chunk.clone()),
-            Some(speech_chunk.clone()),
-            None,
+        // then set shutdown flag to exit.
+        let mut chunks: Vec<Vec<i16>> = vec![
+            speech_chunk.clone(),
+            speech_chunk.clone(),
+            speech_chunk.clone(),
         ];
         chunks.reverse();
 
         let chunks = std::cell::RefCell::new(chunks);
 
-        let capture_fn = || -> Result<Option<Vec<i16>>> {
+        let capture_fn = move || -> Result<Option<Vec<i16>>> {
             let mut c = chunks.borrow_mut();
             match c.pop() {
-                Some(val) => Ok(val),
-                None => Ok(None),
+                Some(val) => Ok(Some(val)),
+                None => {
+                    shutdown_clone.store(true, Ordering::Relaxed);
+                    Ok(None)
+                }
             }
         };
 
@@ -348,5 +353,79 @@ mod tests {
             "Expected no messages when paused, got {}",
             messages.len()
         );
+    }
+
+    #[test]
+    fn test_pipeline_none_does_not_kill_capture() {
+        // Regression test for #14: Ok(None) from WASAPI (empty buffer) should NOT
+        // terminate the pipeline. It should continue and process subsequent chunks.
+        let (tx, rx) = mpsc::channel();
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let shutdown_clone = shutdown.clone();
+
+        let chunk_size = 4;
+        let silence_chunk = vec![0i16; chunk_size];
+        let speech_chunk = vec![100i16; chunk_size];
+
+        let sample_rate = 8;
+        let pre_speech_buffer_secs = 0.5;
+        let silence_threshold_secs = 0.5;
+
+        // Feed: None (empty buffer), then speech, then silence to end segment, then shutdown.
+        // If None killed the pipeline, we'd never see the speech.
+        let mut chunks: Vec<Option<Vec<i16>>> = vec![
+            None,                        // empty buffer — should be skipped
+            None,                        // another empty buffer — still fine
+            Some(speech_chunk.clone()),  // speech start
+            Some(silence_chunk.clone()), // silence -> triggers speech end
+        ];
+        chunks.reverse();
+
+        let chunks = std::cell::RefCell::new(chunks);
+
+        let capture_fn = move || -> Result<Option<Vec<i16>>> {
+            let mut c = chunks.borrow_mut();
+            match c.pop() {
+                Some(val) => Ok(val),
+                None => {
+                    shutdown_clone.store(true, Ordering::Relaxed);
+                    Ok(None)
+                }
+            }
+        };
+
+        let start_fn = || -> Result<()> { Ok(()) };
+        let mut vad = TestVad;
+
+        let result = run_capture_pipeline(
+            "test-mic".to_string(),
+            capture_fn,
+            start_fn,
+            sample_rate,
+            pre_speech_buffer_secs,
+            silence_threshold_secs,
+            &mut vad,
+            chunk_size,
+            tx,
+            shutdown,
+            Arc::new(AtomicBool::new(false)),
+        );
+
+        assert!(result.is_ok());
+
+        // We should see speech messages even though None was returned first.
+        let messages: Vec<AudioMessage> = rx.try_iter().collect();
+        assert!(
+            !messages.is_empty(),
+            "Pipeline should have processed speech after None, but got no messages"
+        );
+
+        // First message should be SpeechStart.
+        match &messages[0] {
+            AudioMessage::SpeechStart { source, .. } => {
+                assert_eq!(source, "test-mic");
+            }
+            other => panic!("Expected SpeechStart, got {:?}", other),
+        }
     }
 }
