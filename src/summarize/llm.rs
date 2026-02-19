@@ -47,7 +47,7 @@ impl std::fmt::Debug for LlmClient {
             .field("endpoint", &self.endpoint)
             .field("api_key", &"[REDACTED]")
             .field("deployment", &self.deployment)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
