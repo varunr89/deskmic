@@ -15,6 +15,8 @@ pub struct Config {
     pub summarization: SummarizationConfig,
     #[serde(default)]
     pub monitoring: MonitoringConfig,
+    #[serde(default)]
+    pub search: SearchConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -136,6 +138,27 @@ impl Default for MonitoringConfig {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SearchConfig {
+    /// Azure OpenAI deployment name for embeddings (e.g. "text-embedding-3-large").
+    pub embedding_deployment: String,
+    /// Seconds of silence between utterances before starting a new chunk.
+    pub chunk_gap_secs: u64,
+    /// Maximum duration in seconds for a single chunk before splitting.
+    pub chunk_max_duration_secs: u64,
+}
+
+impl Default for SearchConfig {
+    fn default() -> Self {
+        Self {
+            embedding_deployment: String::new(),
+            chunk_gap_secs: 60,
+            chunk_max_duration_secs: 300,
+        }
+    }
+}
+
 // --- Default implementations ---
 
 impl Default for Config {
@@ -149,6 +172,7 @@ impl Default for Config {
             transcription: TranscriptionConfig::default(),
             summarization: SummarizationConfig::default(),
             monitoring: MonitoringConfig::default(),
+            search: SearchConfig::default(),
         }
     }
 }
@@ -304,7 +328,7 @@ impl Config {
         let output_dir_str = default_output_dir.to_string_lossy().replace('\\', "\\\\");
 
         format!(
-r#"# deskmic configuration
+            r#"# deskmic configuration
 # Edit this file to customize recording, transcription, and storage settings.
 # Restart deskmic after saving changes for them to take effect.
 
@@ -393,6 +417,15 @@ idle_check_interval_secs = 30
 # Minutes without a new WAV recording before showing a toast notification.
 # Set to 0 to disable gap alerts.
 recording_gap_alert_mins = 30
+
+[search]
+# Azure OpenAI deployment name for text embeddings (used by 'deskmic index').
+# This reuses the endpoint and api_key from [transcription.azure].
+# embedding_deployment = "text-embedding-3-large"
+# Seconds of silence between utterances that triggers a new conversation chunk.
+chunk_gap_secs = 60
+# Maximum duration in seconds for a single chunk before it is split.
+chunk_max_duration_secs = 300
 "#,
             output_dir = output_dir_str
         )
@@ -566,6 +599,7 @@ mod tests {
         assert!(content.contains("[transcription.idle_watch]"));
         assert!(content.contains("[summarization]"));
         assert!(content.contains("[monitoring]"));
+        assert!(content.contains("[search]"));
     }
 
     #[test]
@@ -646,5 +680,37 @@ mod tests {
         "#;
         let config: Config = toml::from_str(toml_str).unwrap();
         assert_eq!(config.monitoring.recording_gap_alert_mins, 30);
+    }
+
+    #[test]
+    fn test_search_config_defaults() {
+        let config = Config::default();
+        assert_eq!(config.search.embedding_deployment, "");
+        assert_eq!(config.search.chunk_gap_secs, 60);
+        assert_eq!(config.search.chunk_max_duration_secs, 300);
+    }
+
+    #[test]
+    fn test_search_config_from_toml() {
+        let toml_str = r#"
+            [search]
+            embedding_deployment = "text-embedding-3-large"
+            chunk_gap_secs = 120
+            chunk_max_duration_secs = 600
+        "#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.search.embedding_deployment, "text-embedding-3-large");
+        assert_eq!(config.search.chunk_gap_secs, 120);
+        assert_eq!(config.search.chunk_max_duration_secs, 600);
+    }
+
+    #[test]
+    fn test_search_config_absent_uses_defaults() {
+        let toml_str = r#"
+            [capture]
+            sample_rate = 16000
+        "#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.search.chunk_gap_secs, 60);
     }
 }
