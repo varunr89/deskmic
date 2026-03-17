@@ -50,4 +50,33 @@ pub enum Commands {
 
     /// Interactive setup wizard (download model, create config, etc.)
     Setup,
+
+    /// Build or update the transcript search index
+    Index,
+
+    /// Search transcripts by semantic similarity
+    Search {
+        /// The search query
+        query: String,
+
+        /// Filter results from this date (YYYY-MM-DD)
+        #[arg(long)]
+        from: Option<String>,
+
+        /// Filter results to this date (YYYY-MM-DD)
+        #[arg(long)]
+        to: Option<String>,
+
+        /// Filter by audio source (mic or teams)
+        #[arg(long)]
+        source: Option<String>,
+
+        /// Maximum number of results to return
+        #[arg(long, default_value = "10")]
+        limit: usize,
+
+        /// Output results as JSON
+        #[arg(long)]
+        json: bool,
+    },
 }
