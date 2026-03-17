@@ -83,11 +83,14 @@ pub fn run_index(config: &Config) -> Result<()> {
         }
 
         // Chunk transcripts.
-        let chunks = chunk_transcripts(
+        let chunks: Vec<_> = chunk_transcripts(
             &transcripts,
             config.search.chunk_gap_secs,
             config.search.chunk_max_duration_secs,
-        );
+        )
+        .into_iter()
+        .filter(|c| !c.text.trim().is_empty())
+        .collect();
 
         if chunks.is_empty() {
             db.set_file_mtime(file_name, mtime)?;

@@ -137,25 +137,52 @@ impl EmbeddingClient {
                 self.deployment
             );
 
-            let response = self
-                .client
-                .post(&url)
-                .header("api-key", &self.api_key)
-                .json(&request)
-                .send()
-                .context("Failed to send embedding request")?;
+            // Retry with exponential backoff for rate limiting.
+            let mut last_error = String::new();
+            let mut response_ok = None;
+            for attempt in 0..5 {
+                let resp = self
+                    .client
+                    .post(&url)
+                    .header("api-key", &self.api_key)
+                    .json(&request)
+                    .send()
+                    .context("Failed to send embedding request")?;
 
-            let status = response.status();
-            if !status.is_success() {
-                let error_body = response
+                let status = resp.status();
+                if status.is_success() {
+                    response_ok = Some(resp);
+                    break;
+                }
+
+                let error_body = resp
                     .text()
                     .unwrap_or_else(|_| "unable to read response body".to_string());
+
+                if status.as_u16() == 429 && attempt < 4 {
+                    // Rate limited — extract retry-after or use exponential backoff.
+                    let wait_secs = 2u64.pow(attempt + 1); // 2, 4, 8, 16
+                    tracing::warn!(
+                        "Rate limited (429), retrying in {}s (attempt {}/5)",
+                        wait_secs,
+                        attempt + 1
+                    );
+                    std::thread::sleep(std::time::Duration::from_secs(wait_secs));
+                    last_error = error_body;
+                    continue;
+                }
+
                 anyhow::bail!(
                     "Azure OpenAI returned HTTP {}: {}",
                     status.as_u16(),
                     error_body
                 );
             }
+
+            let response = response_ok.context(format!(
+                "All 5 retry attempts failed. Last error: {}",
+                last_error
+            ))?;
 
             let embed_response: EmbeddingResponse = response
                 .json()

@@ -84,7 +84,7 @@ impl SearchDb {
 
         if !vec_table_exists {
             conn.execute_batch(&format!(
-                "CREATE VIRTUAL TABLE vec_chunks USING vec0(embedding float[{}])",
+                "CREATE VIRTUAL TABLE vec_chunks USING vec0(embedding float[{}] distance_metric=cosine)",
                 EMBEDDING_DIM
             ))
             .context("failed to create vec_chunks virtual table")?;
