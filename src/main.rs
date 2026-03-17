@@ -148,22 +148,21 @@ fn main() -> anyhow::Result<()> {
             let results = deskmic::search::run_search(&config, params)?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&results)?);
+            } else if results.is_empty() {
+                println!("No results found.");
             } else {
-                if results.is_empty() {
-                    println!("No results found.");
-                } else {
-                    for r in &results {
-                        println!(
-                            "[{} {}-{}] ({}, score: {:.2})",
-                            r.date, r.start_time, r.end_time, r.source, r.score
-                        );
-                        let preview = if r.text.len() > 200 {
-                            format!("{}...", &r.text[..200])
-                        } else {
-                            r.text.clone()
-                        };
-                        println!("{}\n", preview);
-                    }
+                for r in &results {
+                    println!(
+                        "[{} {}-{}] ({}, score: {:.2})",
+                        r.date, r.start_time, r.end_time, r.source, r.score
+                    );
+                    let preview: String = r.text.chars().take(200).collect();
+                    let preview = if r.text.len() > preview.len() {
+                        format!("{}...", preview)
+                    } else {
+                        preview
+                    };
+                    println!("{}\n", preview);
                 }
             }
             Ok(())

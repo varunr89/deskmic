@@ -3,8 +3,15 @@ pub mod db;
 pub mod embeddings;
 pub mod indexer;
 
-use anyhow::Result;
+use std::path::PathBuf;
+
 use crate::config::Config;
+use anyhow::Result;
+
+/// Path to the search database file.
+pub fn db_path(config: &Config) -> PathBuf {
+    config.output.directory.join("deskmic-search.db")
+}
 
 /// Run the indexing pipeline: scan transcripts, chunk, embed, store.
 pub fn run_index(config: &Config) -> Result<()> {
@@ -24,6 +31,7 @@ pub struct SearchResult {
 }
 
 /// Search parameters.
+#[derive(Debug)]
 pub struct SearchParams {
     pub query: String,
     pub from: Option<String>,
@@ -34,11 +42,10 @@ pub struct SearchParams {
 
 /// Run a semantic search query against the index.
 pub fn run_search(config: &Config, params: SearchParams) -> Result<Vec<SearchResult>> {
-    let db_path = config.output.directory.join("deskmic-search.db");
-    let db = db::SearchDb::open(&db_path)?;
+    let db = db::SearchDb::open(&db_path(config))?;
 
-    let embedding = embeddings::EmbeddingClient::from_config(config)?
-        .embed_single(&params.query)?;
+    let embedding =
+        embeddings::EmbeddingClient::from_config(config)?.embed_single(&params.query)?;
 
     db.search(&embedding, &params)
 }
