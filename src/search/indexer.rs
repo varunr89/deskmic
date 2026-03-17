@@ -15,7 +15,7 @@ pub fn run_index(config: &Config) -> Result<()> {
     let db_path = recordings_dir.join("deskmic-search.db");
 
     if !transcript_dir.exists() {
-        println!(
+        tracing::info!(
             "No transcripts directory found at {}",
             transcript_dir.display()
         );
@@ -41,7 +41,7 @@ pub fn run_index(config: &Config) -> Result<()> {
 
     let mut total_new_chunks = 0usize;
     let mut total_files_indexed = 0usize;
-    let total_existing = db.count_chunks()?;
+    let _total_existing = db.count_chunks()?;
 
     for jsonl_path in &jsonl_files {
         let file_name = jsonl_path
