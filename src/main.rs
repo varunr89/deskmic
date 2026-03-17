@@ -20,9 +20,7 @@ fn attach_console() {
 /// Returns the mutex handle on success, or None if another instance already holds it.
 /// The handle must be kept alive for the lifetime of the process.
 #[cfg(target_os = "windows")]
-fn try_acquire_instance_mutex(
-    name: &str,
-) -> Option<windows::Win32::Foundation::HANDLE> {
+fn try_acquire_instance_mutex(name: &str) -> Option<windows::Win32::Foundation::HANDLE> {
     use windows::core::PCWSTR;
     use windows::Win32::Foundation::ERROR_ALREADY_EXISTS;
     use windows::Win32::System::Threading::CreateMutexW;
@@ -55,10 +53,7 @@ fn show_already_running_message() {
         .encode_utf16()
         .chain(std::iter::once(0))
         .collect();
-    let caption: Vec<u16> = "deskmic"
-        .encode_utf16()
-        .chain(std::iter::once(0))
-        .collect();
+    let caption: Vec<u16> = "deskmic".encode_utf16().chain(std::iter::once(0)).collect();
     unsafe {
         MessageBoxW(
             None,
@@ -86,9 +81,7 @@ fn main() -> anyhow::Result<()> {
     let _instance_mutex = {
         let mutex_name = match &cli.command {
             None | Some(Commands::Record) => Some("Global\\deskmic"),
-            Some(Commands::Transcribe { watch: true, .. }) => {
-                Some("Global\\deskmic-transcriber")
-            }
+            Some(Commands::Transcribe { watch: true, .. }) => Some("Global\\deskmic-transcriber"),
             _ => None,
         };
 
@@ -134,9 +127,45 @@ fn main() -> anyhow::Result<()> {
                 deskmic::transcribe::runner::run_transcribe_oneshot(&config, backend.as_deref())
             }
         }
-        Commands::Summarize { range } => {
-            deskmic::summarize::runner::run_summarize(&config, &range)
-        }
+        Commands::Summarize { range } => deskmic::summarize::runner::run_summarize(&config, &range),
         Commands::Setup => deskmic::setup::run_setup(),
+        Commands::Index => deskmic::search::run_index(&config),
+        Commands::Search {
+            query,
+            from,
+            to,
+            source,
+            limit,
+            json,
+        } => {
+            let params = deskmic::search::SearchParams {
+                query,
+                from,
+                to,
+                source,
+                limit,
+            };
+            let results = deskmic::search::run_search(&config, params)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&results)?);
+            } else if results.is_empty() {
+                println!("No results found.");
+            } else {
+                for r in &results {
+                    println!(
+                        "[{} {}-{}] ({}, score: {:.2})",
+                        r.date, r.start_time, r.end_time, r.source, r.score
+                    );
+                    let preview: String = r.text.chars().take(200).collect();
+                    let preview = if r.text.len() > preview.len() {
+                        format!("{}...", preview)
+                    } else {
+                        preview
+                    };
+                    println!("{}\n", preview);
+                }
+            }
+            Ok(())
+        }
     }
 }
