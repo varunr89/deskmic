@@ -124,23 +124,24 @@ impl SearchDb {
     /// Delete all chunks (and their vectors) for a given date.
     /// Returns the number of chunks deleted.
     pub fn delete_chunks_for_date(&self, date: &str) -> Result<usize> {
-        // First collect the rowids of chunks to delete from the vec table.
-        let mut stmt = self
-            .conn
-            .prepare("SELECT rowid FROM chunks WHERE date = ?1")?;
-        let rowids: Vec<i64> = stmt
-            .query_map(params![date], |row| row.get(0))?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let tx = self.conn.unchecked_transaction()?;
+
+        // Collect the rowids of chunks to delete from the vec table.
+        let rowids: Vec<i64> = {
+            let mut stmt = tx.prepare("SELECT rowid FROM chunks WHERE date = ?1")?;
+            let result = stmt
+                .query_map(params![date], |row| row.get(0))?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            result
+        };
 
         for rowid in &rowids {
-            self.conn
-                .execute("DELETE FROM vec_chunks WHERE rowid = ?1", params![rowid])?;
+            tx.execute("DELETE FROM vec_chunks WHERE rowid = ?1", params![rowid])?;
         }
 
-        let deleted = self
-            .conn
-            .execute("DELETE FROM chunks WHERE date = ?1", params![date])?;
+        let deleted = tx.execute("DELETE FROM chunks WHERE date = ?1", params![date])?;
 
+        tx.commit()?;
         Ok(deleted)
     }
 
@@ -280,7 +281,8 @@ impl SearchDb {
 
             let (date, source, start_time, end_time, text, files_json) = match row {
                 Ok(r) => r,
-                Err(_) => continue, // orphan vec entry
+                Err(rusqlite::Error::QueryReturnedNoRows) => continue,
+                Err(e) => return Err(e.into()),
             };
 
             // Post-filter: date range
