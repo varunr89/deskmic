@@ -200,6 +200,14 @@ fn run_transcribe_oneshot_with_status(
     status.touch();
     let _ = status.write(recordings_dir);
 
+    // Re-index search database after transcription completes.
+    if status.session.files_done > 0 {
+        tracing::info!("Transcription complete, updating search index...");
+        if let Err(e) = crate::search::indexer::run_index(config) {
+            tracing::error!("Search index update failed: {:?}", e);
+        }
+    }
+
     Ok(())
 }
 
