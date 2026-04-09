@@ -155,7 +155,8 @@ pub fn estimate_tokens(text: &str) -> usize {
 }
 
 /// If the transcript text is too large for a single pass, chunk it by hour groups
-/// that each fit within `max_tokens_per_chunk`.
+/// that each fit within `max_tokens_per_chunk`.  When a single hour-group exceeds
+/// the limit the individual transcripts within that hour are split across chunks.
 pub fn chunk_transcripts(
     transcripts: &[Transcript],
     max_tokens_per_chunk: usize,
@@ -175,15 +176,31 @@ pub fn chunk_transcripts(
             .join(" ");
         let hour_tokens = estimate_tokens(&hour_text);
 
-        if !current_chunk.is_empty() && current_tokens + hour_tokens > max_tokens_per_chunk {
+        // If the whole hour fits alongside what we already have, add it.
+        if current_tokens + hour_tokens <= max_tokens_per_chunk {
+            for t in hour_transcripts {
+                current_chunk.push((*t).clone());
+            }
+            current_tokens += hour_tokens;
+            continue;
+        }
+
+        // Hour doesn't fit as a whole — split transcript-by-transcript.
+        // First, flush the current chunk if it has anything.
+        if !current_chunk.is_empty() {
             chunks.push(std::mem::take(&mut current_chunk));
             current_tokens = 0;
         }
 
         for t in hour_transcripts {
+            let t_tokens = estimate_tokens(&t.text);
+            if !current_chunk.is_empty() && current_tokens + t_tokens > max_tokens_per_chunk {
+                chunks.push(std::mem::take(&mut current_chunk));
+                current_tokens = 0;
+            }
             current_chunk.push((*t).clone());
+            current_tokens += t_tokens;
         }
-        current_tokens += hour_tokens;
     }
 
     if !current_chunk.is_empty() {

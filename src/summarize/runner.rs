@@ -229,8 +229,12 @@ fn generate_summary(
     let estimated_tokens = prompt::estimate_tokens(&total_text);
     tracing::info!("Estimated transcript tokens: {}", estimated_tokens);
 
-    // If content fits in a single pass (~60k token context, leave room for prompt + response)
-    const MAX_SINGLE_PASS_TOKENS: usize = 50_000;
+    // Single-pass threshold.  Azure's HTTP request body appears to be
+    // limited to ~150 KB.  With JSON encoding and the system prompt,
+    // ~30k transcript tokens (~120k chars) approaches that limit.
+    // Chunks are kept smaller (8k tokens ≈ 32k chars) for safety.
+    const MAX_SINGLE_PASS_TOKENS: usize = 30_000;
+    const CHUNK_TOKENS: usize = 8_000;
 
     if estimated_tokens <= MAX_SINGLE_PASS_TOKENS {
         // Single pass
@@ -247,7 +251,7 @@ fn generate_summary(
         estimated_tokens
     );
 
-    let chunks = prompt::chunk_transcripts(transcripts, MAX_SINGLE_PASS_TOKENS / 2);
+    let chunks = prompt::chunk_transcripts(transcripts, CHUNK_TOKENS);
     let mut partial_summaries = Vec::new();
 
     for (i, chunk) in chunks.iter().enumerate() {
