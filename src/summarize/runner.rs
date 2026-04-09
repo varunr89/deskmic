@@ -40,11 +40,7 @@ pub fn run_summarize(config: &Config, range: &str) -> Result<()> {
         match EmailClient::from_config(&config.summarization) {
             Ok(email_client) => {
                 let subject = format!("deskmic {} — {}", file_suffix, label);
-                let html_body = html::markdown_to_html_email(
-                    &no_content_msg,
-                    &subject,
-                    &label,
-                );
+                let html_body = html::markdown_to_html_email(&no_content_msg, &subject, &label);
                 match email_client.send_email(&subject, &no_content_msg, Some(&html_body)) {
                     Ok(_) => tracing::info!("Notification email sent"),
                     Err(e) => tracing::warn!("Failed to send notification email: {:#}", e),
@@ -63,8 +59,7 @@ pub fn run_summarize(config: &Config, range: &str) -> Result<()> {
     );
 
     // 3. Build prompt and call LLM
-    let llm = LlmClient::from_config(config)
-        .context("Failed to initialize LLM client")?;
+    let llm = LlmClient::from_config(config).context("Failed to initialize LLM client")?;
 
     let custom_prompt = &config.summarization.system_prompt;
     let summary = generate_summary(&llm, &label, &transcripts, custom_prompt)?;
@@ -158,16 +153,8 @@ pub fn resolve_date_range(arg: &str) -> Result<(Vec<NaiveDate>, String, String)>
                 d += chrono::Duration::days(1);
             }
 
-            let label = format!(
-                "{} to {}",
-                start.format("%Y-%m-%d"),
-                end.format("%Y-%m-%d")
-            );
-            let suffix = format!(
-                "{}-to-{}",
-                start.format("%Y-%m-%d"),
-                end.format("%Y-%m-%d")
-            );
+            let label = format!("{} to {}", start.format("%Y-%m-%d"), end.format("%Y-%m-%d"));
+            let suffix = format!("{}-to-{}", start.format("%Y-%m-%d"), end.format("%Y-%m-%d"));
             Ok((dates, label, suffix))
         }
         _ => {
@@ -276,10 +263,11 @@ fn generate_summary(
     // Combine partial summaries
     let combine_system = format!(
         "You are a personal productivity assistant. Below are partial summaries of voice \
-         transcripts from {}. Combine them into a single coherent summary with:\n\
-         1. An **Executive Summary** (3-5 bullet points)\n\
-         2. A **Detailed Breakdown** organized by hour\n\n\
-         Deduplicate and merge overlapping content. Keep it concise.",
+         transcripts from {}. Combine them into a single coherent summary as flowing prose — \
+         no bullets, no headers. Write as if recapping the period in a personal journal. \
+         Weave in quotes with clear attribution. Use specific names, projects, and details. \
+         Deduplicate and merge overlapping content. Let themes connect naturally rather than \
+         following strict chronology. Match depth to density of content.",
         date_label
     );
 
