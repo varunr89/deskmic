@@ -85,7 +85,7 @@ impl LlmClient {
         };
 
         let client = reqwest::blocking::Client::builder()
-            .timeout(std::time::Duration::from_secs(120))
+            .timeout(std::time::Duration::from_secs(300))
             .build()?;
 
         Ok(Self {
