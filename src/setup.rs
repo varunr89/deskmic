@@ -118,10 +118,7 @@ struct SummarizationCredentials {
     recipient_address: String,
 }
 
-fn update_config_with_summarization(
-    config_text: &str,
-    creds: &SummarizationCredentials,
-) -> String {
+fn update_config_with_summarization(config_text: &str, creds: &SummarizationCredentials) -> String {
     // Map of commented-out key → new value to substitute.
     // Each entry is (key_name, replacement_value).
     let replacements: &[(&str, &str)] = &[
@@ -164,8 +161,7 @@ fn update_config_with_summarization(
 // Step 1 – Download Whisper model
 // ---------------------------------------------------------------------------
 
-const HF_BASE_URL: &str =
-    "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/";
+const HF_BASE_URL: &str = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/";
 
 const MODEL_OPTIONS: &[(&str, &str, &str)] = &[
     ("tiny.en", "ggml-tiny.en.bin", "~75 MB"),
@@ -198,10 +194,7 @@ fn step_download_model() {
 
     // If already present, ask before re-downloading.
     if dest.exists() {
-        if !prompt_yn(
-            &format!("  {filename} already exists. Re-download?"),
-            false,
-        ) {
+        if !prompt_yn(&format!("  {filename} already exists. Re-download?"), false) {
             println!("  Skipping download.");
             return;
         }
@@ -250,9 +243,7 @@ fn download_file(url: &str, dest: &Path) -> Result<()> {
             let pct = (downloaded as f64 / total as f64 * 100.0) as u32;
             let mb_done = downloaded as f64 / 1_048_576.0;
             let mb_total = total as f64 / 1_048_576.0;
-            print!(
-                "\r  [{pct:>3}%] {mb_done:.1} / {mb_total:.1} MB",
-            );
+            print!("\r  [{pct:>3}%] {mb_done:.1} / {mb_total:.1} MB",);
         } else {
             let mb_done = downloaded as f64 / 1_048_576.0;
             print!("\r  {mb_done:.1} MB downloaded");
@@ -339,16 +330,8 @@ fn step_summarization() {
             nonempty,
             "Deployment name cannot be empty",
         ),
-        acs_endpoint: prompt_validated(
-            "ACS endpoint",
-            validate_url,
-            "Must start with https://",
-        ),
-        acs_api_key: prompt_validated(
-            "ACS API key",
-            nonempty,
-            "API key cannot be empty",
-        ),
+        acs_endpoint: prompt_validated("ACS endpoint", validate_url, "Must start with https://"),
+        acs_api_key: prompt_validated("ACS API key", nonempty, "API key cannot be empty"),
         sender_address: prompt_validated(
             "Sender email address",
             validate_email,
@@ -371,7 +354,10 @@ fn step_summarization() {
     };
 
     if !path.exists() {
-        println!("  Warning: config file not found at {}. Run step 2 first.", path.display());
+        println!(
+            "  Warning: config file not found at {}. Run step 2 first.",
+            path.display()
+        );
         return;
     }
 
@@ -426,6 +412,24 @@ fn create_scheduled_tasks() {
         match cmd.output() {
             Ok(output) if output.status.success() => {
                 println!("  Created scheduled task: {name}");
+                // Enable StartWhenAvailable so the task runs when the machine
+                // wakes up if it missed the scheduled time (e.g. laptop was asleep).
+                let ps_result = std::process::Command::new("powershell")
+                    .args([
+                        "-NoProfile",
+                        "-Command",
+                        &format!(
+                            "$t = Get-ScheduledTask -TaskName '{}'; \
+                             $t.Settings.StartWhenAvailable = $true; \
+                             $t.Settings.DisallowStartIfOnBatteries = $false; \
+                             Set-ScheduledTask -InputObject $t | Out-Null",
+                            name
+                        ),
+                    ])
+                    .output();
+                if let Err(e) = ps_result {
+                    println!("  Warning: could not set StartWhenAvailable for {name}: {e}");
+                }
             }
             Ok(output) => {
                 let stderr = String::from_utf8_lossy(&output.stderr);

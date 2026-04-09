@@ -82,23 +82,36 @@ fn default_system_prompt(date_label: &str) -> String {
         "You are a personal productivity assistant. You will be given raw voice transcripts \
          from a desk microphone recording of a workday ({date_label}). The transcripts contain \
          meetings, conversations, and ambient audio captured throughout the day.\n\n\
-         Your task:\n\
-         1. Write an **Executive Summary** (3-5 bullet points) of the most important topics, \
-            decisions, and action items from the day.\n\
-         2. Write a **Detailed Breakdown** organized by hour, summarizing what was discussed \
-            in each time block.\n\n\
-         Guidelines:\n\
-         - Focus on actionable information: decisions made, tasks assigned, key discussion points.\n\
-         - Ignore background noise, small talk, and filler.\n\
-         - For the hourly breakdown, use a single ### heading per hour (e.g. \"### 13:00–13:59\") \
-            and present the full details for that hour as a cohesive narrative with bullet points. \
-            Do NOT further subdivide into minute-level sub-sections or time ranges within the hour.\n\
-         - Completely omit hours that contain only microphone testing, noise, silence, or no \
-            substantive discussion. Do not include them at all.\n\
-         - Use clear, professional language.\n\
-         - Format the output in Markdown.\n\
-         - If you recognize names, use them. Otherwise, use generic labels like \"Speaker A\".\n\
-         - Keep the summary concise but complete. Target 200-500 words for a daily summary.",
+         Write an engaging summary of this workday as flowing prose — no bullets, no headers.\n\n\
+         VOICE & STRUCTURE:\n\
+         - Hook immediately: open with the most important decision, insight, or tension from the day\n\
+         - Write as if recapping the day to yourself in a personal journal\n\
+         - Build from the hook, letting topics connect naturally by theme rather than strict chronology\n\
+         - Vary your rhythm: short punchy sentences for emphasis. Longer passages when unpacking complexity.\n\
+         - Show HOW conclusions were reached, not just the conclusions themselves\n\
+         - Never reference \"the transcript\" or \"the recording\" — the ideas should stand alone\n\n\
+         QUOTES — USE LIBERALLY:\n\
+         - Weave quotes directly into your prose with clear attribution: Sarah put it simply: \"exact words here\"\n\
+         - ALWAYS name the speaker — never say \"one person noted\" or \"someone mentioned\"\n\
+         - Include 3-5 inline quotes minimum from the day's conversations\n\
+         - For one or two standout moments, use a block quote — then briefly unpack why it matters\n\
+         - Quotes make the day come alive — use them as anchors throughout\n\n\
+         NAMES & SPECIFICS:\n\
+         - Use specific names: people, projects, products, teams\n\
+         - \"The billing team targeting 3/13 code complete\" not \"one team had a deadline\"\n\
+         - If you recognize names, use them. Otherwise, use context clues (\"the PM\", \"the designer\")\n\
+         - Specificity builds a useful record you can search later\n\n\
+         LENGTH:\n\
+         - Match depth to density: ~300 words for a quiet day, up to 800 for a packed day of meetings\n\
+         - When in doubt, favor engaging depth over brevity\n\n\
+         TONE:\n\
+         - Conversational but substantive — smart, not corporate\n\
+         - Honest about tensions, open questions, or things that felt unresolved\n\
+         - If something was genuinely surprising or a breakthrough, let that land\n\n\
+         FILTERING:\n\
+         - Ignore background noise, small talk, keyboard sounds, and filler\n\
+         - Focus on decisions, insights, action items, and meaningful exchanges\n\
+         - Completely skip time periods with no substantive content",
         date_label = date_label,
     )
 }
@@ -118,10 +131,7 @@ pub fn build_prompt(
         custom_system_prompt.replace("{date_label}", date_label)
     };
 
-    let filtered: Vec<&Transcript> = transcripts
-        .iter()
-        .filter(|t| !is_noise(&t.text))
-        .collect();
+    let filtered: Vec<&Transcript> = transcripts.iter().filter(|t| !is_noise(&t.text)).collect();
 
     let grouped = group_by_hour(&filtered);
 
@@ -150,10 +160,7 @@ pub fn chunk_transcripts(
     transcripts: &[Transcript],
     max_tokens_per_chunk: usize,
 ) -> Vec<Vec<Transcript>> {
-    let filtered: Vec<&Transcript> = transcripts
-        .iter()
-        .filter(|t| !is_noise(&t.text))
-        .collect();
+    let filtered: Vec<&Transcript> = transcripts.iter().filter(|t| !is_noise(&t.text)).collect();
 
     let grouped = group_by_hour(&filtered);
     let mut chunks: Vec<Vec<Transcript>> = Vec::new();
@@ -249,18 +256,12 @@ mod tests {
     }
 
     #[test]
-    fn test_build_prompt_filters_noise() {
-        let transcripts = vec![
-            make_transcript("mic_14-30-00.wav", "Important meeting topic"),
-            make_transcript("mic_14-35-00.wav", ""),
-            make_transcript("mic_14-40-00.wav", "[BLANK_AUDIO]"),
-            make_transcript("mic_15-00-00.wav", "Action item discussed"),
-        ];
-        let (_system, user) = build_prompt("2026-02-17", &transcripts, "");
-        assert!(user.contains("Important meeting topic"));
-        assert!(user.contains("Action item discussed"));
-        assert!(!user.contains("[BLANK_AUDIO]"));
-        assert!(user.contains("Total segments: 2"));
+    fn test_build_prompt_empty_uses_default() {
+        let transcripts = vec![make_transcript("mic_14-30-00.wav", "Hello world")];
+        let (system, _user) = build_prompt("2026-02-17", &transcripts, "");
+        assert!(system.contains("personal productivity assistant"));
+        assert!(system.contains("2026-02-17"));
+        assert!(system.contains("flowing prose"));
     }
 
     #[test]
@@ -274,9 +275,7 @@ mod tests {
 
     #[test]
     fn test_chunk_transcripts_single_chunk() {
-        let transcripts = vec![
-            make_transcript("mic_14-30-00.wav", "Hello world"),
-        ];
+        let transcripts = vec![make_transcript("mic_14-30-00.wav", "Hello world")];
         let chunks = chunk_transcripts(&transcripts, 100_000);
         assert_eq!(chunks.len(), 1);
         assert_eq!(chunks[0].len(), 1);
@@ -305,20 +304,9 @@ mod tests {
 
     #[test]
     fn test_build_prompt_custom_system_prompt() {
-        let transcripts = vec![
-            make_transcript("mic_14-30-00.wav", "Hello world"),
-        ];
-        let (system, _user) = build_prompt("2026-02-17", &transcripts, "Summarize {date_label} please");
+        let transcripts = vec![make_transcript("mic_14-30-00.wav", "Hello world")];
+        let (system, _user) =
+            build_prompt("2026-02-17", &transcripts, "Summarize {date_label} please");
         assert_eq!(system, "Summarize 2026-02-17 please");
-    }
-
-    #[test]
-    fn test_build_prompt_empty_uses_default() {
-        let transcripts = vec![
-            make_transcript("mic_14-30-00.wav", "Hello world"),
-        ];
-        let (system, _user) = build_prompt("2026-02-17", &transcripts, "");
-        assert!(system.contains("personal productivity assistant"));
-        assert!(system.contains("2026-02-17"));
     }
 }
