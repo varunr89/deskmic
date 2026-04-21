@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 
 use crate::config::Config;
+use crate::search;
 use crate::transcribe::backend::{Transcript, TranscriptionBackend};
 use crate::transcribe::state::TranscriptionState;
 use crate::transcribe::status::{TranscriberState, TranscriptionStatus};
@@ -130,15 +131,17 @@ fn save_transcript(
 /// Run one-shot transcription of all pending files.
 pub fn run_transcribe_oneshot(config: &Config, backend_override: Option<&str>) -> Result<()> {
     let mut status = TranscriptionStatus::new();
-    run_transcribe_oneshot_with_status(config, backend_override, &mut status)
+    run_transcribe_oneshot_with_status(config, backend_override, &mut status)?;
+    Ok(())
 }
 
 /// Run one-shot transcription, updating the provided status as it goes.
+/// Returns the number of files successfully transcribed.
 fn run_transcribe_oneshot_with_status(
     config: &Config,
     backend_override: Option<&str>,
     status: &mut TranscriptionStatus,
-) -> Result<()> {
+) -> Result<usize> {
     let recordings_dir = &config.output.directory;
     let mut state = TranscriptionState::load(recordings_dir)?;
     let pending = find_pending_files(recordings_dir, &state)?;
@@ -150,7 +153,7 @@ fn run_transcribe_oneshot_with_status(
         status.current_file = None;
         status.touch();
         let _ = status.write(recordings_dir);
-        return Ok(());
+        return Ok(0);
     }
 
     tracing::info!("Found {} pending files", pending.len());
@@ -200,7 +203,7 @@ fn run_transcribe_oneshot_with_status(
     status.touch();
     let _ = status.write(recordings_dir);
 
-    Ok(())
+    Ok(status.session.files_done as usize)
 }
 
 /// Run idle-aware transcription daemon.
@@ -226,8 +229,14 @@ pub fn run_transcribe_watch(config: &Config, backend_override: Option<&str>) -> 
         if cpu_usage < idle_config.cpu_threshold_percent {
             tracing::info!("System idle (CPU: {:.1}%), processing...", cpu_usage);
             match run_transcribe_oneshot_with_status(config, backend_override, &mut status) {
-                Ok(()) => {
+                Ok(files_done) => {
                     status.error_message = None;
+                    if files_done > 0 {
+                        tracing::info!("Transcribed {} files, running index...", files_done);
+                        if let Err(e) = search::run_index(config) {
+                            tracing::error!("Post-transcription index failed: {:?}", e);
+                        }
+                    }
                 }
                 Err(e) => {
                     tracing::error!("Transcription batch failed: {:?}", e);
