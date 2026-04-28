@@ -4,5 +4,7 @@
 .deskmic-state.json
 deskmic.toml
 
+.env
+
 .commitmsg
 .worktrees

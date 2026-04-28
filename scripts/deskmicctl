@@ -1,0 +1,126 @@
+#!/usr/bin/env bash
+# deskmicctl: Wrapper for deskmic operations with blob sync
+# Runs deskmic.exe commands and syncs results to blob storage
+#
+# Usage:
+#   deskmicctl ingest       — transcribe + index + push DB to blob
+#   deskmicctl index        — index transcripts + push DB to blob
+#   deskmicctl search "q"   — search (pulls latest DB from blob first)
+#   deskmicctl stats        — show database stats
+#   deskmicctl browse       — browse recent transcripts
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# Load .env
+for env_file in \
+    "${DESKMIC_ENV:-}" \
+    "${SCRIPT_DIR}/../deskmic/.env" \
+    "${SCRIPT_DIR}/.env" \
+    "/mnt/c/Users/${USER}/deskmic/.env" \
+    "${HOME}/.config/deskmic/.env"; do
+    if [[ -n "$env_file" && -f "$env_file" ]]; then
+        set -a; source "$env_file"; set +a
+        break
+    fi
+done
+
+: "${DESKMIC_OUTPUT_DIR:?Set DESKMIC_OUTPUT_DIR in .env}"
+
+# Resolve paths
+DESKMIC_WIN_EXE="${DESKMIC_WIN_EXE:-C:\\Users\\${USER}\\AppData\\Local\\deskmic\\deskmic.exe}"
+
+if [[ "$DESKMIC_OUTPUT_DIR" == *\\* || "$DESKMIC_OUTPUT_DIR" == [A-Z]:* ]]; then
+    DB_FILE=$(wslpath -u "$DESKMIC_OUTPUT_DIR" 2>/dev/null || echo "/mnt/c/${DESKMIC_OUTPUT_DIR#C:\\}")/deskmic-search.db
+else
+    DB_FILE="${DESKMIC_OUTPUT_DIR}/deskmic-search.db"
+fi
+
+cmd="${1:-help}"
+shift || true
+
+case "$cmd" in
+    ingest)
+        echo "=== Transcribing pending audio ==="
+        powershell.exe -Command "& '${DESKMIC_WIN_EXE}' transcribe"
+        echo ""
+        echo "=== Indexing transcripts ==="
+        powershell.exe -Command "& '${DESKMIC_WIN_EXE}' index"
+        echo ""
+        echo "=== Pushing to blob ==="
+        deskmic-sync push
+        ;;
+
+    index)
+        echo "=== Indexing transcripts ==="
+        powershell.exe -Command "& '${DESKMIC_WIN_EXE}' index"
+        echo ""
+        echo "=== Pushing DB to blob ==="
+        deskmic-sync push-db
+        ;;
+
+    search)
+        deskmic-sync now 2>/dev/null
+        query="$*"
+        powershell.exe -Command "& '${DESKMIC_WIN_EXE}' search '${query}'"
+        ;;
+
+    stats)
+        python3 -c "
+import sqlite3, os, datetime
+db = '${DB_FILE}'
+if not os.path.exists(db):
+    print('Database not found. Run: deskmic-sync now')
+    exit(1)
+size_mb = os.path.getsize(db) / (1024*1024)
+conn = sqlite3.connect(db)
+cur = conn.cursor()
+cur.execute('SELECT COUNT(*) FROM chunks')
+chunks = cur.fetchone()[0]
+cur.execute('SELECT COUNT(*) FROM indexed_files')
+files = cur.fetchone()[0]
+cur.execute('SELECT MIN(date), MAX(date) FROM chunks')
+mn, mx = cur.fetchone()
+cur.execute('SELECT SUM(duration_secs)/3600.0 FROM chunks')
+hours = cur.fetchone()[0] or 0
+cur.execute('SELECT MAX(indexed_at) FROM indexed_files')
+last = cur.fetchone()[0]
+last_dt = datetime.datetime.fromtimestamp(last) if last else None
+conn.close()
+print(f'Database: {size_mb:.1f} MB')
+print(f'Chunks:   {chunks}')
+print(f'Files:    {files}')
+print(f'Range:    {mn} to {mx}')
+print(f'Audio:    {hours:.1f} hours')
+if last_dt:
+    print(f'Indexed:  {last_dt:%Y-%m-%d %H:%M:%S}')
+"
+        ;;
+
+    browse)
+        python3 -c "
+import sqlite3
+db = '${DB_FILE}'
+conn = sqlite3.connect(db)
+cur = conn.cursor()
+cur.execute('SELECT date, source, start_time, end_time, substr(text,1,120) FROM chunks ORDER BY date DESC, start_time DESC LIMIT 20')
+for row in cur.fetchall():
+    d, src, st, et, txt = row
+    print(f'[{d} {st}-{et}] ({src})')
+    print(f'  {txt}...')
+    print()
+conn.close()
+"
+        ;;
+
+    *)
+        echo "Usage: deskmicctl {ingest|index|search|stats|browse}"
+        echo ""
+        echo "  ingest   — transcribe + index + push to blob"
+        echo "  index    — index + push DB to blob"
+        echo "  search   — pull latest DB + search"
+        echo "  stats    — show database stats"
+        echo "  browse   — browse recent transcripts"
+        ;;
+esac

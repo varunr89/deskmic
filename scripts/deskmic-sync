@@ -1,0 +1,149 @@
+#!/usr/bin/env bash
+# deskmic-sync: Sync deskmic search DB and transcripts with Azure Blob Storage
+# Local machine is the writer; dev box and others are read-only.
+#
+# Usage:
+#   deskmic-sync status   — show sync status (local vs blob)
+#   deskmic-sync now      — download latest DB + transcripts from blob
+#   deskmic-sync push     — upload local DB + transcripts to blob (writer only)
+#   deskmic-sync push-db  — upload only the DB after indexing
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# Load .env from repo root, installed location, or env var
+for env_file in \
+    "${DESKMIC_ENV:-}" \
+    "${SCRIPT_DIR}/../deskmic/.env" \
+    "${SCRIPT_DIR}/.env" \
+    "/mnt/c/Users/${USER}/deskmic/.env" \
+    "${HOME}/.config/deskmic/.env"; do
+    if [[ -n "$env_file" && -f "$env_file" ]]; then
+        set -a; source "$env_file"; set +a
+        break
+    fi
+done
+
+# Validate required vars
+: "${DESKMIC_BLOB_ACCOUNT:?Set DESKMIC_BLOB_ACCOUNT in .env}"
+: "${DESKMIC_BLOB_CONTAINER:?Set DESKMIC_BLOB_CONTAINER in .env}"
+: "${DESKMIC_OUTPUT_DIR:?Set DESKMIC_OUTPUT_DIR in .env}"
+
+ACCOUNT="$DESKMIC_BLOB_ACCOUNT"
+CONTAINER="$DESKMIC_BLOB_CONTAINER"
+BASE_URL="https://${ACCOUNT}.blob.core.windows.net/${CONTAINER}"
+
+# Convert Windows path to WSL path if needed
+if [[ "$DESKMIC_OUTPUT_DIR" == *\\* || "$DESKMIC_OUTPUT_DIR" == [A-Z]:* ]]; then
+    LOCAL_DIR=$(wslpath -u "$DESKMIC_OUTPUT_DIR" 2>/dev/null || echo "/mnt/c/${DESKMIC_OUTPUT_DIR#C:\\}")
+else
+    LOCAL_DIR="$DESKMIC_OUTPUT_DIR"
+fi
+DB_FILE="${LOCAL_DIR}/deskmic-search.db"
+TRANSCRIPT_DIR="${LOCAL_DIR}/transcripts"
+
+# Use RW SAS by default; DESKMIC_BLOB_SAS overrides both
+SAS="${DESKMIC_BLOB_SAS:-${DESKMIC_BLOB_SAS_RW:-}}"
+if [[ -z "$SAS" ]]; then
+    echo "Error: Set DESKMIC_BLOB_SAS_RW or DESKMIC_BLOB_SAS in .env" >&2
+    exit 1
+fi
+
+cmd="${1:-status}"
+
+blob_url() {
+    echo "${BASE_URL}/${1}?${SAS}"
+}
+
+case "$cmd" in
+    status)
+        echo "=== deskmic-sync status ==="
+        if [[ -f "$DB_FILE" ]]; then
+            local_size=$(stat -c%s "$DB_FILE" 2>/dev/null || echo "?")
+            local_mtime=$(stat -c%Y "$DB_FILE" 2>/dev/null || echo "0")
+            local_date=$(date -d "@$local_mtime" "+%Y-%m-%d %H:%M:%S" 2>/dev/null || echo "?")
+            echo "Local DB:  ${local_size} bytes, modified ${local_date}"
+        else
+            echo "Local DB:  not found"
+        fi
+
+        blob_headers=$(curl -sI "$(blob_url deskmic-search.db)" 2>/dev/null)
+        blob_size=$(echo "$blob_headers" | grep -i "content-length" | tr -d '\r' | awk '{print $2}')
+        blob_date=$(echo "$blob_headers" | grep -i "last-modified" | sed 's/[Ll]ast-[Mm]odified: //' | tr -d '\r')
+        if [[ -n "$blob_size" ]]; then
+            echo "Blob DB:   ${blob_size} bytes, modified ${blob_date}"
+        else
+            echo "Blob DB:   not found"
+        fi
+
+        local_count=$(find "$TRANSCRIPT_DIR" -name "*.jsonl" 2>/dev/null | wc -l)
+        echo "Local transcripts: ${local_count} files"
+        echo ""
+        if [[ -n "$blob_size" && -f "$DB_FILE" ]]; then
+            if (( local_size == blob_size )); then
+                echo "Status: IN SYNC (sizes match)"
+            else
+                echo "Status: OUT OF SYNC (local=${local_size}, blob=${blob_size})"
+            fi
+        fi
+        ;;
+
+    now)
+        echo "Downloading latest DB from blob..."
+        curl -sS -o "${DB_FILE}.tmp" "$(blob_url deskmic-search.db)"
+        mv "${DB_FILE}.tmp" "$DB_FILE"
+        dl_size=$(stat -c%s "$DB_FILE")
+        echo "Downloaded deskmic-search.db ($(( dl_size / 1024 / 1024 )) MB)"
+
+        echo "Downloading transcripts..."
+        mkdir -p "$TRANSCRIPT_DIR"
+        list_url="${BASE_URL}?restype=container&comp=list&prefix=transcripts/&${SAS}"
+        blob_names=$(curl -sS "$list_url" | grep -oP '<Name>\K[^<]+')
+        count=0
+        for blob_name in $blob_names; do
+            filename=$(basename "$blob_name")
+            curl -sS -o "${TRANSCRIPT_DIR}/${filename}" "$(blob_url "$blob_name")"
+            count=$((count + 1))
+        done
+        echo "Downloaded ${count} transcript files"
+        echo "Sync complete."
+        ;;
+
+    push)
+        echo "Uploading DB to blob..."
+        curl -sS -X PUT -H "x-ms-blob-type: BlockBlob" \
+            -H "x-ms-version: 2024-11-04" \
+            --data-binary "@${DB_FILE}" \
+            "$(blob_url deskmic-search.db)" > /dev/null
+        echo "Uploaded deskmic-search.db ($(( $(stat -c%s "$DB_FILE") / 1024 / 1024 )) MB)"
+
+        echo "Uploading transcripts..."
+        count=0
+        for f in "$TRANSCRIPT_DIR"/*.jsonl; do
+            fname=$(basename "$f")
+            curl -sS -X PUT -H "x-ms-blob-type: BlockBlob" \
+                -H "x-ms-version: 2024-11-04" \
+                --data-binary "@${f}" \
+                "$(blob_url "transcripts/${fname}")" > /dev/null
+            count=$((count + 1))
+        done
+        echo "Uploaded ${count} transcript files"
+        echo "Push complete."
+        ;;
+
+    push-db)
+        echo "Uploading DB to blob..."
+        curl -sS -X PUT -H "x-ms-blob-type: BlockBlob" \
+            -H "x-ms-version: 2024-11-04" \
+            --data-binary "@${DB_FILE}" \
+            "$(blob_url deskmic-search.db)" > /dev/null
+        up_size=$(stat -c%s "$DB_FILE")
+        echo "Uploaded deskmic-search.db ($(( up_size / 1024 / 1024 )) MB)"
+        ;;
+
+    *)
+        echo "Usage: deskmic-sync {status|now|push|push-db}"
+        exit 1
+        ;;
+esac
