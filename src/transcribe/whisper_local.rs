@@ -52,6 +52,8 @@ impl TranscriptionBackend for WhisperLocal {
             .to_string();
         let source = if filename.starts_with("mic") {
             "mic"
+        } else if filename.starts_with("recorder_") {
+            "recorder"
         } else {
             "teams"
         };
@@ -87,6 +89,7 @@ impl TranscriptionBackend for WhisperLocal {
                 speaker,
                 start_secs: Some(0.0),
                 end_secs: Some(total_duration),
+                recording_id: None,
             }]);
         }
 
@@ -115,6 +118,7 @@ impl TranscriptionBackend for WhisperLocal {
                     speaker: speaker.clone(),
                     start_secs: Some(start),
                     end_secs: Some(end),
+                    recording_id: None,
                 });
             }
         }
@@ -130,6 +134,7 @@ impl TranscriptionBackend for WhisperLocal {
                 speaker,
                 start_secs: Some(0.0),
                 end_secs: Some(total_duration),
+                recording_id: None,
             });
         }
 

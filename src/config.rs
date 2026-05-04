@@ -17,6 +17,8 @@ pub struct Config {
     pub monitoring: MonitoringConfig,
     #[serde(default)]
     pub search: SearchConfig,
+    #[serde(default)]
+    pub recorder: RecorderConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -159,6 +161,32 @@ impl Default for SearchConfig {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RecorderConfig {
+    pub enabled: bool,
+    pub volume_label: String,
+    pub device_subpath: String,
+    pub device_retention_days: u32,
+    pub chunk_target_minutes: u32,
+    pub vad_silence_hangover_ms: u32,
+    pub poll_interval_minutes: u32,
+}
+
+impl Default for RecorderConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            volume_label: "IC RECORDER".to_string(),
+            device_subpath: "REC_FILE/FOLDER01".to_string(),
+            device_retention_days: 7,
+            chunk_target_minutes: 10,
+            vad_silence_hangover_ms: 500,
+            poll_interval_minutes: 15,
+        }
+    }
+}
+
 // --- Default implementations ---
 
 impl Default for Config {
@@ -173,6 +201,7 @@ impl Default for Config {
             summarization: SummarizationConfig::default(),
             monitoring: MonitoringConfig::default(),
             search: SearchConfig::default(),
+            recorder: RecorderConfig::default(),
         }
     }
 }
@@ -426,6 +455,16 @@ recording_gap_alert_mins = 30
 chunk_gap_secs = 60
 # Maximum duration in seconds for a single chunk before it is split.
 chunk_max_duration_secs = 300
+
+# === Recorder ingestion (Sony UX570 / IC RECORDER) ===
+[recorder]
+enabled = true
+volume_label = "IC RECORDER"
+device_subpath = "REC_FILE/FOLDER01"
+device_retention_days = 7
+chunk_target_minutes = 10
+vad_silence_hangover_ms = 500
+poll_interval_minutes = 15
 "#,
             output_dir = output_dir_str
         )
@@ -712,5 +751,33 @@ mod tests {
         "#;
         let config: Config = toml::from_str(toml_str).unwrap();
         assert_eq!(config.search.chunk_gap_secs, 60);
+    }
+
+    #[test]
+    fn test_recorder_config_defaults() {
+        let config = Config::default();
+        assert!(config.recorder.enabled);
+        assert_eq!(config.recorder.volume_label, "IC RECORDER");
+        assert_eq!(config.recorder.device_subpath, "REC_FILE/FOLDER01");
+        assert_eq!(config.recorder.device_retention_days, 7);
+        assert_eq!(config.recorder.chunk_target_minutes, 10);
+        assert_eq!(config.recorder.vad_silence_hangover_ms, 500);
+        assert_eq!(config.recorder.poll_interval_minutes, 15);
+    }
+
+    #[test]
+    fn test_recorder_config_from_toml() {
+        let toml_str = r#"
+            [recorder]
+            enabled = false
+            volume_label = "OTHER LABEL"
+            device_retention_days = 14
+        "#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert!(!config.recorder.enabled);
+        assert_eq!(config.recorder.volume_label, "OTHER LABEL");
+        assert_eq!(config.recorder.device_retention_days, 14);
+        // unspecified fields fall back to defaults
+        assert_eq!(config.recorder.chunk_target_minutes, 10);
     }
 }

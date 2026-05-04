@@ -79,4 +79,15 @@ pub enum Commands {
         #[arg(long)]
         json: bool,
     },
+
+    /// Ingest audio files from the connected Sony UX570 recorder
+    IngestRecorder {
+        /// Log what would be ingested without writing anything
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Retry rows previously marked failed
+        #[arg(long)]
+        retry_failed: bool,
+    },
 }

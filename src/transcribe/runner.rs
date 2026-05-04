@@ -181,8 +181,11 @@ fn run_transcribe_oneshot_with_status(
                 // Run diarization on teams audio to identify individual speakers
                 #[cfg(target_os = "windows")]
                 {
-                    let is_teams = transcripts.first().map(|t| t.source == "teams").unwrap_or(false);
-                    if is_teams {
+                    let needs_diar = transcripts
+                        .first()
+                        .map(|t| t.source == "teams" || t.source == "recorder")
+                        .unwrap_or(false);
+                    if needs_diar {
                         let exe_dir = std::env::current_exe()
                             .ok()
                             .and_then(|p| p.parent().map(|d| d.to_path_buf()));
@@ -216,8 +219,78 @@ fn run_transcribe_oneshot_with_status(
                 status.session.audio_secs += total_duration;
                 status.session.words += total_words as u64;
 
+                // Recorder chunks carry a sidecar with base_offset_secs and recording_id.
+                let sidecar_path = path.with_extension("json");
+                let mut sidecar_recording_id: Option<String> = None;
+                let mut base_offset: f64 = 0.0;
+                if sidecar_path.exists() {
+                    if let Ok(s) = std::fs::read_to_string(&sidecar_path) {
+                        if let Ok(sc) =
+                            serde_json::from_str::<crate::recorder_ingest::chunk::ChunkSidecar>(&s)
+                        {
+                            sidecar_recording_id = Some(sc.recording_id);
+                            base_offset = sc.base_offset_secs;
+                        }
+                    }
+                }
+                if base_offset != 0.0 || sidecar_recording_id.is_some() {
+                    for t in transcripts.iter_mut() {
+                        t.recording_id = sidecar_recording_id.clone();
+                        if let Some(s) = t.start_secs.as_mut() {
+                            *s += base_offset;
+                        }
+                        if let Some(e) = t.end_secs.as_mut() {
+                            *e += base_offset;
+                        }
+                    }
+                }
+
                 for transcript in &transcripts {
                     save_transcript(transcript, path, recordings_dir, &mut state)?;
+                }
+
+                if let Some(rid) = sidecar_recording_id.as_deref() {
+                    if let Some(parent) = path.parent() {
+                        let mut more_pending = false;
+                        if let Ok(rd) = std::fs::read_dir(parent) {
+                            for e in rd.flatten() {
+                                let n = e.file_name().to_string_lossy().to_string();
+                                if !n.ends_with(".wav") { continue; }
+                                let stem = n.trim_end_matches(".wav");
+                                let sib_json = parent.join(format!("{}.json", stem));
+                                if !sib_json.exists() { continue; }
+                                if let Ok(s) = std::fs::read_to_string(&sib_json) {
+                                    if let Ok(sc) = serde_json::from_str::<
+                                        crate::recorder_ingest::chunk::ChunkSidecar,
+                                    >(&s)
+                                    {
+                                        if sc.recording_id == rid {
+                                            let rel = parent
+                                                .strip_prefix(recordings_dir)
+                                                .unwrap_or(parent)
+                                                .join(&n)
+                                                .to_string_lossy()
+                                                .replace('\\', "/");
+                                            if !state.is_transcribed(&rel) {
+                                                more_pending = true;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if !more_pending {
+                            let db = crate::recorder_ingest::recorder_db_path(recordings_dir);
+                            if let Ok(conn) = crate::recorder_ingest::registry::open(&db) {
+                                let _ = crate::recorder_ingest::registry::mark_transcribed(
+                                    &conn,
+                                    rid,
+                                    chrono::Local::now().timestamp(),
+                                );
+                            }
+                        }
+                    }
                 }
             }
             Err(e) => {

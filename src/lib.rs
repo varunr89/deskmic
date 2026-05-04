@@ -11,3 +11,4 @@ pub mod setup;
 pub mod search;
 #[cfg(target_os = "windows")]
 pub mod tray;
+pub mod recorder_ingest;

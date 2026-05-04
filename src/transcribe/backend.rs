@@ -16,6 +16,8 @@ pub struct Transcript {
     pub start_secs: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub end_secs: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recording_id: Option<String>,
 }
 
 pub trait TranscriptionBackend: Send {

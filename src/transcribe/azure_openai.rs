@@ -76,6 +76,8 @@ impl TranscriptionBackend for AzureOpenAIBackend {
 
         let source = if filename.starts_with("mic") {
             "mic"
+        } else if filename.starts_with("recorder_") {
+            "recorder"
         } else {
             "teams"
         };
@@ -94,6 +96,7 @@ impl TranscriptionBackend for AzureOpenAIBackend {
             speaker: if source == "mic" { Some("You".to_string()) } else { None },
             start_secs: Some(0.0),
             end_secs: Some(duration_secs),
+            recording_id: None,
         }])
     }
 }

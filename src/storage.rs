@@ -333,3 +333,8 @@ mod tests {
         assert!(recent_dir.exists(), "Recent folder should remain");
     }
 }
+
+/// Ensure the recorder_ingest table exists on the search/index DB.
+pub fn ensure_recorder_ingest_schema(conn: &rusqlite::Connection) -> anyhow::Result<()> {
+    crate::recorder_ingest::registry::ensure_schema(conn)
+}

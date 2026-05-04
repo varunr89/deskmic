@@ -189,6 +189,7 @@ mod tests {
             speaker: None,
             start_secs: None,
             end_secs: None,
+            recording_id: None,
         }
     }
 

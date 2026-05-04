@@ -82,6 +82,7 @@ fn main() -> anyhow::Result<()> {
         let mutex_name = match &cli.command {
             None | Some(Commands::Record) => Some("Global\\deskmic"),
             Some(Commands::Transcribe { watch: true, .. }) => Some("Global\\deskmic-transcriber"),
+            Some(Commands::IngestRecorder { .. }) => Some("Global\\deskmic-ingest-recorder"),
             _ => None,
         };
 
@@ -165,6 +166,21 @@ fn main() -> anyhow::Result<()> {
                     println!("{}\n", preview);
                 }
             }
+            Ok(())
+        }
+        Commands::IngestRecorder { dry_run, retry_failed } => {
+            let summary = deskmic::recorder_ingest::run(
+                &config,
+                deskmic::recorder_ingest::IngestOptions { dry_run, retry_failed },
+            )?;
+            println!(
+                "considered={} ingested={} skipped={} failed={} device_deleted={}",
+                summary.considered,
+                summary.ingested,
+                summary.skipped_known,
+                summary.failed,
+                summary.deleted_from_device
+            );
             Ok(())
         }
     }
