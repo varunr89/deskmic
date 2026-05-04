@@ -68,7 +68,13 @@ fn format_hour_block(hour: u32, transcripts: &[&Transcript]) -> String {
             .unwrap_or("")
             .trim_end_matches(".wav")
             .replace('-', ":");
-        let source_tag = if t.source == "mic" { "Mic" } else { "App" };
+        let source_tag = if let Some(ref spk) = t.speaker {
+            spk.as_str()
+        } else if t.source == "mic" {
+            "You"
+        } else {
+            "Others"
+        };
         lines.push(format!("[{} {}] {}", time_tag, source_tag, t.text.trim()));
     }
 
@@ -226,6 +232,9 @@ mod tests {
             duration_secs: 8.0,
             file: file.to_string(),
             text: text.to_string(),
+            speaker: None,
+            start_secs: None,
+            end_secs: None,
         }
     }
 

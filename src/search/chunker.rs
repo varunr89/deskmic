@@ -186,6 +186,9 @@ mod tests {
             duration_secs: duration,
             file: file.to_string(),
             text: text.to_string(),
+            speaker: None,
+            start_secs: None,
+            end_secs: None,
         }
     }
 

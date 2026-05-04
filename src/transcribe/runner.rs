@@ -177,18 +177,48 @@ fn run_transcribe_oneshot_with_status(
 
         tracing::info!("Transcribing: {}", path.display());
         match backend.transcribe(path) {
-            Ok(transcript) => {
+            Ok(mut transcripts) => {
+                // Run diarization on teams audio to identify individual speakers
+                #[cfg(target_os = "windows")]
+                {
+                    let is_teams = transcripts.first().map(|t| t.source == "teams").unwrap_or(false);
+                    if is_teams {
+                        let exe_dir = std::env::current_exe()
+                            .ok()
+                            .and_then(|p| p.parent().map(|d| d.to_path_buf()));
+                        if let Some(dir) = exe_dir {
+                            let seg_model = dir.join("pyannote-segmentation-3.0.onnx");
+                            let emb_model = dir.join("wespeaker-voxceleb-resnet34.onnx");
+                            if crate::transcribe::diarize::models_available(&seg_model, &emb_model) {
+                                if let Err(e) = crate::transcribe::diarize::diarize_teams_transcripts(
+                                    &mut transcripts, path, &seg_model, &emb_model,
+                                ) {
+                                    tracing::warn!("Diarization failed (continuing without speaker labels): {:?}", e);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                let total_duration: f64 = transcripts.iter().map(|t| t.duration_secs).sum();
+                let total_words: usize = transcripts
+                    .iter()
+                    .map(|t| t.text.split_whitespace().count())
+                    .sum();
                 tracing::info!(
-                    "Transcribed: {} ({:.1}s)",
-                    transcript.file,
-                    transcript.duration_secs
+                    "Transcribed: {} ({:.1}s, {} segments)",
+                    transcripts.first().map(|t| t.file.as_str()).unwrap_or("?"),
+                    total_duration,
+                    transcripts.len()
                 );
                 // Update session stats
                 status.session.files_done += 1;
-                status.session.audio_secs += transcript.duration_secs;
-                status.session.words += transcript.text.split_whitespace().count() as u64;
+                status.session.audio_secs += total_duration;
+                status.session.words += total_words as u64;
 
-                save_transcript(&transcript, path, recordings_dir, &mut state)?;
+                for transcript in &transcripts {
+                    save_transcript(transcript, path, recordings_dir, &mut state)?;
+                }
             }
             Err(e) => {
                 tracing::error!("Failed to transcribe {}: {:?}", path.display(), e);

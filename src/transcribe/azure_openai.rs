@@ -34,7 +34,7 @@ impl TranscriptionBackend for AzureOpenAIBackend {
         "azure-openai"
     }
 
-    fn transcribe(&self, audio_path: &Path) -> Result<Transcript> {
+    fn transcribe(&self, audio_path: &Path) -> Result<Vec<Transcript>> {
         let url = format!(
             "{}/openai/deployments/{}/audio/transcriptions?api-version=2024-06-01",
             self.endpoint, self.deployment
@@ -85,12 +85,15 @@ impl TranscriptionBackend for AzureOpenAIBackend {
             .map(|d| d.to_string_lossy().to_string())
             .unwrap_or_default();
 
-        Ok(Transcript {
+        Ok(vec![Transcript {
             timestamp,
             source: source.to_string(),
             duration_secs,
             file: filename,
             text,
-        })
+            speaker: if source == "mic" { Some("You".to_string()) } else { None },
+            start_secs: Some(0.0),
+            end_secs: Some(duration_secs),
+        }])
     }
 }

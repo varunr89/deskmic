@@ -1,5 +1,7 @@
 pub mod azure_openai;
 pub mod backend;
+#[cfg(target_os = "windows")]
+pub mod diarize;
 pub mod runner;
 pub mod state;
 pub mod status;

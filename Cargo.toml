@@ -50,7 +50,8 @@ tempfile = "3"
 # Windows-only dependencies
 [target.'cfg(target_os = "windows")'.dependencies]
 wasapi = "0.22"
-voice_activity_detector = "0.2"
+voice_activity_detector = "0.2.1"
 tray-icon = "0.21"
 windows = { version = "0.62", features = ["Win32_UI_WindowsAndMessaging", "Win32_System_Console", "Win32_System_Threading", "Win32_Foundation", "UI_Notifications", "Data_Xml_Dom"] }
 whisper-rs = "0.16"
+pyannote-rs = "0.3"
